@@ -21,7 +21,7 @@ class NameResolutionAPINamespace:
 
     def __init__(self, option_configuration: tornado.options.OptionParser):
         self.handlers = {}
-        self.default_configuration = "config/config.default.json"
+        self.default_configuration = "config.default.json"
         self.config: types.SimpleNamespace = self.load_configuration(option_configuration)
         self.elasticsearch: types.SimpleNamespace = self.configure_elasticsearch()
         if self._is_open_telemetry_configurable():

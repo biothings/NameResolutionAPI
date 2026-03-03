@@ -1,11 +1,11 @@
 from urllib.parse import urlparse
 
-from biothings.web.handlers import BaseAPIHandler
+from biothings.web.handlers import BaseHandler
 
-from web.handlers.nameres.biolink import BIOLINK_MODEL_VERSION
+from nameres.biolink import BIOLINK_MODEL_VERSION
 
 
-class NameResolutionHealthHandler(BaseAPIHandler):
+class NameResolutionHealthHandler(BaseHandler):
     """
     Important Endpoints
     * /_cat/nodes

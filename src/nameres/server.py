@@ -22,7 +22,7 @@ from nameres.application import NameResolutionAPI
 logger = logging.getLogger(__name__)
 
 
-class NameResoltionWebServer:
+class NameResolutionWebServer:
     def __init__(self, application: NameResolutionAPI, namespace: NameResolutionAPINamespace):
         logger.info("Biothings API %s", __version__)
         self.application = application

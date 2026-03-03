@@ -9,9 +9,10 @@ import logging
 import re
 from typing import Optional
 
-from biothings.web.handlers import BaseAPIHandler
-from biothings.web.services.namespace import BiothingsNamespace
+from biothings.web.handlers import BaseHandler
 from tornado.web import HTTPError
+
+from nameres.namespace import NameResolutionAPINamespace
 
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ class LookupResult:
     clique_identifier_count: int
 
 
-class BaseNameResolutionLookupHandler(BaseAPIHandler):
+class BaseNameResolutionLookupHandler(BaseHandler):
     """
     Base class for both the lookup and bulklookup endpoints
 
@@ -343,7 +344,7 @@ class NameResolutionLookupHandler(BaseNameResolutionLookupHandler):
         self.finish(lookup_result)
 
 
-class NameResolutionBulkLookupHandler(BaseAPIHandler):
+class NameResolutionBulkLookupHandler(BaseHandler):
     """
     Mirror implementation to the renci implementation found at
     https://name-resolution-sri.renci.org/docs#/
@@ -367,7 +368,7 @@ class NameResolutionBulkLookupHandler(BaseAPIHandler):
 
 
 async def lookup(
-    biothings_metadata: BiothingsNamespace, lookup_query: list[LookupQuery], filters: dict
+    biothings_metadata: NameResolutionAPINamespace, lookup_query: list[LookupQuery], filters: dict
 ) -> list[LookupResult]:
     """Returns cliques with a name or synonym that contains a specified string."""
     elasticsearch_query = _build_elasticsearch_query(lookup_query, filters)
