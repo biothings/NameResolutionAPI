@@ -134,7 +134,7 @@ class NameResolutionAPINamespace:
         if option_configuration.conf is not None:
             optional_configuration = pathlib.Path(option_configuration.conf).absolute().resolve()
             if optional_configuration.exists():
-                with open(option_configuration, "r", encoding="utf-8") as handle:
+                with open(optional_configuration, "r", encoding="utf-8") as handle:
                     configuration.update(json.load(handle))
 
         # Force the static path to the webapp directory

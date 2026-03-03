@@ -1,5 +1,8 @@
 from urllib.parse import urlparse
 
+import elastic_transport
+from elasticsearch import AsyncElasticsearch
+
 from biothings.web.handlers import BaseHandler
 
 from nameres.biolink import BIOLINK_MODEL_VERSION
@@ -15,22 +18,42 @@ class NameResolutionHealthHandler(BaseHandler):
     name = "health"
 
     async def get(self):
-        compendia_url = self.biothings.metadata.biothing_metadata["node"]["src"]["nameres"]["url"]
-        parsed_compendia_url = urlparse(compendia_url)
-        babel_version = parsed_compendia_url.path.split("/")[-2]
+        async_client: AsyncElasticsearch = self.biothings.elasticsearch.async_client
+        search_indices = self.biothings.elasticsearch.indices
+
+        babel_version = None
 
         try:
-            index_name = self.biothings.elasticsearch.metadata.indices["node"]
-            index_stats_response = await self.biothings.elasticsearch.async_client.indices.stats(
-                index=index_name, metric=["docs", "segments"]
+            nameres_index_metadata: elastic_transport.ObjectApiResponse = await async_client.indices.get(
+                index=search_indices
             )
 
-            index_statistics = {
-                "numDocs": index_stats_response["indices"][index_name]["total"]["docs"].get("count", ""),
-                "deletedDocs": index_stats_response["indices"][index_name]["total"]["docs"].get("deleted", ""),
-                "segmentCount": index_stats_response["indices"][index_name]["total"]["segments"].get("count", ""),
-                "size": f'{index_stats_response["indices"][index_name]["total"]["docs"].get("total_size_in_bytes", "") / 10**9} GB',
-            }
+            # greedy approach to extract the first index from the body
+            for search_index in search_indices:
+                index_body = nameres_index_metadata.body.get(search_index, None)
+                if index_body is not None:
+                    compendia_url = index_body["mappings"]["_meta"]["src"]["nameres"]["url"]
+                    parsed_compendia_url = urlparse(compendia_url)
+                    babel_version = parsed_compendia_url.path.split("/")[-2]
+                    break
+
+            index_stats_response = await self.biothings.elasticsearch.async_client.indices.stats(
+                index=search_indices, metric=["docs", "segments"]
+            )
+
+            index_statistics = {"numDocs": 0, "deletedDocs": 0, "segmentCount": 0, "size": 0}
+
+            # greedy approach to extract the first index from the body
+            for search_index in search_indices:
+                stats_body = index_stats_response["indices"].get(search_index, None)
+                if stats_body is not None:
+                    index_statistics = {
+                        "numDocs": stats_body["total"]["docs"].get("count", ""),
+                        "deletedDocs": stats_body["total"]["docs"].get("deleted", ""),
+                        "segmentCount": stats_body["total"]["segments"].get("count", ""),
+                        "size": f'{stats_body["total"]["docs"].get("total_size_in_bytes", "") / 10**9} GB',
+                    }
+                    break
 
         except Exception:
             status_response = {
