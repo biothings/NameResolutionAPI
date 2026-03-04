@@ -4,6 +4,7 @@ Lookup endpoints for the name-resolution service
 Converted from SOLR -> Elasticsearch
 """
 
+import collections
 import dataclasses
 import logging
 import re
@@ -369,7 +370,7 @@ class NameResolutionBulkLookupHandler(BaseHandler):
 
 async def lookup(
     biothings_metadata: NameResolutionAPINamespace, lookup_query: list[LookupQuery], filters: dict
-) -> list[LookupResult]:
+) -> collections.OrderedDict:
     """Returns cliques with a name or synonym that contains a specified string."""
     elasticsearch_query = _build_elasticsearch_query(lookup_query, filters)
 
@@ -398,7 +399,10 @@ async def lookup(
     }
     lookup_response = await biothings_metadata.elasticsearch.async_client.search(**search_parameters)
 
-    outputs = []
+    # https://www.tornadoweb.org/en/stable/web.html#tornado.web.RequestHandler.write
+    # We have to change the API slightly here due to security requirements around returning
+    # list-objects as the API response
+    outputs = collections.OrderedDict()
     for doc in lookup_response["hits"]["hits"]:
         preferred_matches = []
         synonym_matches = []
@@ -409,9 +413,10 @@ async def lookup(
             preferred_matches.extend(highlighting_response.get("preferred_name", []))
 
         source = doc["_source"]
-        outputs.append(
+        curie_identifier = source.get("curie", "")
+        outputs[curie_identifier] = dataclasses.asdict(
             LookupResult(
-                curie=source.get("curie", ""),
+                curie=curie_identifier,
                 label=source.get("preferred_name", ""),
                 highlighting=(
                     {
