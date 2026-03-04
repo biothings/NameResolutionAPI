@@ -2,6 +2,7 @@
 Handler for the synonyms endpoint for nameres
 """
 
+import json
 import logging
 
 from biothings.web.handlers import BaseHandler
@@ -34,7 +35,8 @@ class NameResolutionSynonymsHandler(BaseHandler):
 
     async def post(self):
         try:
-            preferred_curies = self.args_json.get("preferred_curies", [])
+            post_body: dict = json.loads(self.request.body)
+            preferred_curies = post_body.get("preferred_curies", [])
             if len(preferred_curies) == 0:
                 raise HTTPError(
                     detail="Missing curie argument, there must be at least one curie to normalize", status_code=400

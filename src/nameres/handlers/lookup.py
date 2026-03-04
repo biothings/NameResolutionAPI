@@ -7,6 +7,7 @@ Converted from SOLR -> Elasticsearch
 import collections
 import dataclasses
 import logging
+import json
 import re
 from typing import Optional
 
@@ -155,7 +156,7 @@ class BaseNameResolutionLookupHandler(BaseHandler):
     def _parse_lookup_string_arguments(self) -> list[str]:
         """Attempt to determine if this is a singular or bulk lookup."""
         search_string = self.get_argument("string", default=None)
-        search_string_collection = self.get_argument("strings", default=None)
+        search_string_collection = json.loads(self.request.body).get("strings", None)
 
         if search_string is None and search_string_collection is None:
             raise LookupArgumentException("Either `string` or `strings` must be supplied for lookup")
@@ -345,7 +346,7 @@ class NameResolutionLookupHandler(BaseNameResolutionLookupHandler):
         self.finish(lookup_result)
 
 
-class NameResolutionBulkLookupHandler(BaseHandler):
+class NameResolutionBulkLookupHandler(BaseNameResolutionLookupHandler):
     """
     Mirror implementation to the renci implementation found at
     https://name-resolution-sri.renci.org/docs#/
@@ -355,17 +356,18 @@ class NameResolutionBulkLookupHandler(BaseHandler):
 
     name = "bulk-lookup"
 
-    async def post(self) -> dict[str, list[LookupResult]]:
+    async def post(self) -> dict[str, collections.OrderedDict]:
         """Returns cliques with a name or synonym that contains a specified string sent via batch."""
 
         try:
-            lookup_result = {}
+            lookup_results = {}
             for lookup_query in self.lookup_queries:
-                lookup_result[lookup_query.string] = await lookup(self.biothings, lookup_query, self.filters)
-            return lookup_result
+                lookup_result: collections.OrderedDict = await lookup(self.biothings, lookup_query, self.filters)
+                lookup_key: str = lookup_query.string.pop()
+                lookup_results[lookup_key] = lookup_result
         except Exception as gen_exc:
             raise HTTPError(detail="Error occurred during processing.", status_code=500) from gen_exc
-        self.finish(lookup_result)
+        self.finish(lookup_results)
 
 
 async def lookup(
