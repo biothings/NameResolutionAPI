@@ -1,8 +1,0 @@
-FROM caddy:2-alpine
-
-# Copy Caddyfile
-COPY Caddyfile /etc/caddy/Caddyfile
-
-EXPOSE 9000
-
-CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
