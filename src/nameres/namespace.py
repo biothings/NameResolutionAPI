@@ -143,14 +143,14 @@ class NameResolutionAPINamespace:
         configuration["webserver"]["SETTINGS"]["static_path"] = str(webapp_directory)
         configuration["webserver"]["SETTINGS"]["static_url_prefix"] = "/"
 
-        configuration_namespace = types.SimpleNamespace(configuration)
+        configuration_namespace = types.SimpleNamespace(**configuration)
 
         # override options
         if option_configuration.host is not None:
-            configuration_namespace.websever.HOST = option_configuration.host
+            configuration_namespace.webserver["HOST"] = option_configuration.host
 
         if option_configuration.port is not None:
-            configuration_namespace.websever.PORT = option_configuration.port
+            configuration_namespace.webserver["PORT"] = option_configuration.port
 
         return configuration_namespace
 

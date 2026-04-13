@@ -1,0 +1,12 @@
+name: nameres
+services:
+  nameres:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      args:
+        - ARG NAMERES_REPO=https://github.com/biothings/NameResolutionAPI.git
+        - ARG NAMERES_BRANCH=main
+    container_name: nameres
+    ports:
+      - 9000:9000
