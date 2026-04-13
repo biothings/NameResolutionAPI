@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "biothings-annotator.fullname" . }}
+  name: {{ include "name-resolution.fullname" . }}
   labels:
-    {{- include "biothings-annotator.labels" . | nindent 4 }}
+    {{- include "name-resolution.labels" . | nindent 4 }}
 spec:
   strategy:
     type: {{ .Values.deployment.strategy.type }}
@@ -15,11 +15,11 @@ spec:
   replicas: {{ .Values.deployment.replicaCount }}
   selector:
     matchLabels:
-      {{- include "biothings-annotator.selectorLabels" . | nindent 6 }}
+      {{- include "name-resolution.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "biothings-annotator.selectorLabels" . | nindent 8 }}
+        {{- include "name-resolution.selectorLabels" . | nindent 8 }}
         {{- toYaml .Values.ncats.labels | nindent 8 }}
     spec:
       containers:

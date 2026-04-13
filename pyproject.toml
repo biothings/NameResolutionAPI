@@ -68,7 +68,7 @@ telemetry = [
 
 
 [project.urls]
-"Homepage" = "https://github.com/biothings/NameResolutionAPI.git"
+"Homepage" = "https://github.com/biothings/NameResolutionAPI"
 
 
 [tool.black]

@@ -1,4 +1,4 @@
-# Default values for biothings-annotator.
+# Default values for name-resolution.
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
@@ -14,7 +14,7 @@ deployment:
       # A new pod will only be created after an old pod is taken down.
       maxSurge: 0
 image:
-  repository: 853771734544.dkr.ecr.us-east-1.amazonaws.com/translator-bte-pending-api-annotator
+  repository: 853771734544.dkr.ecr.us-east-1.amazonaws.com/translator-name-resolution-api
   pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
   tag: DOCKER_VERSION_VALUE
@@ -49,7 +49,7 @@ ingress:
 ncats:
   labels:
     gov.nih.ncats.appenv: appenv
-    gov.nih.ncats.appname: bte-biothings-annotator
+    gov.nih.ncats.appname: bte-name-resolution
     gov.nih.ncats.appentry: BTEPA_HOSTNAME_VALUE
     gov.nih.ncats.appentrytype: https
     gov.nih.ncats.appentryport: tcp

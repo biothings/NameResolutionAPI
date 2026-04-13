@@ -1,6 +1,6 @@
 #!/bin/bash
 
-projectName="biothings-annotator"
+projectName="name-resolution"
 namespace="bte"
 
 #set +x
