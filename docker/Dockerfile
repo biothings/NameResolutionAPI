@@ -1,6 +1,6 @@
 FROM python:3.12 AS builder
 
-ARG NAMERES_REPO=https://github.com/chevvak2/NameResolutionAPI.git
+ARG NAMERES_REPO=https://github.com/biothings/NameResolutionAPI.git
 ARG NAMERES_BRANCH=main
 
 WORKDIR /build/nameres
