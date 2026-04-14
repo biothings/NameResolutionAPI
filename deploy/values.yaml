@@ -1,6 +1,9 @@
 # Default values for name-resolution.
-# This is a YAML-formatted file.
+# This is a YAML-formatted file.   
 # Declare variables to be passed into your templates.
+
+# Override the full deployment name to prevent release name prefix
+fullnameOverride: "name-resolution"
 
 deployment:
   replicaCount: 1
@@ -20,9 +23,9 @@ image:
   tag: DOCKER_VERSION_VALUE
 
 containers:
-  name: biothingsannotator
+  name: name-resolution
   es_host: ES_HOST_VALUE
-  port: 9000
+  port: 8000
 
 env:
   OPENTELEMETRY_ENABLED_VALUE: True

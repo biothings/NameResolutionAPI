@@ -30,14 +30,4 @@ spec:
               name: {{ include "name-resolution.fullname" . }}
               port:
                 number: 80
-    - host: {{ .Values.ingress.annotatorHost | quote }}
-      http:
-        paths:
-        - path: /*
-          pathType: ImplementationSpecific
-          backend:
-            service:
-              name: {{ include "name-resolution.fullname" . }}
-              port:
-                number: 80
 {{- end }}

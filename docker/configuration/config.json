@@ -1,0 +1,27 @@
+{
+    "webserver": {
+        "HOST": "localhost",
+        "PORT": 9000,
+        "ENABLE_CURL_CLIENT": true,
+        "SETTINGS": {
+            "debug": true,
+            "autoreload": true
+        }
+    },
+    "api": {
+        "API_PREFIX": "nameres",
+        "API_VERSION": ""
+    },
+    "elasticsearch": {
+        "ES_HOST": "http://elasticsearch.es-core-components.svc.cluster.local:9200",
+        "ES_INDEX": "nameres",
+        "ES_ALIAS": "nameres",
+        "ES_DOC_TYPE": "node", 
+        "ES_INDICES": {},
+        "ES_ARGS": {
+            "sniff": false,
+            "request_timeout": 60
+        }
+    },
+    "OPENTELEMETRY_ENABLED": false
+}

@@ -1,6 +1,6 @@
 FROM python:3.12 AS builder
 
-ARG NAMERES_REPO=https://github.com/biothings/NameResolutionAPI.git
+ARG NAMERES_REPO=https://github.com/chevvak2/NameResolutionAPI.git
 ARG NAMERES_BRANCH=main
 
 WORKDIR /build/nameres
@@ -24,8 +24,11 @@ WORKDIR /home/nameres/configuration
 COPY --from=builder --chown=nameres:nameres /build/nameres/src/nameres/config/config.default.json /home/nameres/configuration
 COPY --from=builder --chown=nameres:nameres /build/nameres/version.txt /home/nameres/configuration/version.txt
 
-COPY --chown=nameres:nameres docker/configuration/supervisord.conf /etc/supervisor/supervisord.conf
-COPY --chown=nameres:nameres docker/configuration/Caddyfile /etc/caddy/Caddyfile
+# Override with corrected configuration for Kubernetes cluster
+COPY --chown=nameres:nameres configuration/config.json /home/nameres/configuration/config.json
+
+COPY --chown=nameres:nameres configuration/supervisord.conf /etc/supervisor/supervisord.conf
+COPY --chown=nameres:nameres configuration/Caddyfile /etc/caddy/Caddyfile
 
 COPY --from=caddy_builder --chown=nameres:nameres /usr/bin/caddy /usr/bin/caddy
 
