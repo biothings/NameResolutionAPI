@@ -25,7 +25,7 @@ image:
 containers:
   name: name-resolution
   es_host: ES_HOST_VALUE
-  port: 9000
+  port: 8000
 
 env:
   OPENTELEMETRY_ENABLED_VALUE: True
