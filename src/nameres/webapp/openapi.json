@@ -826,7 +826,7 @@
   "servers": [
     {
       "description": "Default server",
-      "url": "https://biothings.ci.transltr.io/nameres/",
+      "url": "https://namelookup-es.ci.transltr.io/",
       "x-maturity": "development",
       "x-location": "RENCI"
     },
