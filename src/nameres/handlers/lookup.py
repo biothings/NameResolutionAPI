@@ -156,7 +156,7 @@ class BaseNameResolutionLookupHandler(BaseHandler):
     def _parse_lookup_string_arguments(self) -> list[str]:
         """Attempt to determine if this is a singular or bulk lookup."""
         search_string = self.get_argument("string", default=None)
-        search_string_collection = json.loads(self.request.body).get("strings", None)
+        search_string_collection = json.loads(self.request.body).get("strings", None) if self.request.body else None
 
         if search_string is None and search_string_collection is None:
             raise LookupArgumentException("Either `string` or `strings` must be supplied for lookup")
