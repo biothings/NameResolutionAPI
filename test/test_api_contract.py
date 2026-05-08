@@ -48,6 +48,15 @@ def _request_json(base_url: str, path: str, *, method: str = "GET", body=None, h
     return status, response_headers, json.loads(response_body.decode("utf-8"))
 
 
+def _assert_solr_compatible_cors_headers(headers, origin: str, allowed_headers: str = "*"):
+    assert headers["Access-Control-Allow-Origin"] == origin
+    assert headers["Access-Control-Allow-Credentials"] == "true"
+    assert headers["Access-Control-Allow-Methods"] == "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT"
+    assert headers["Access-Control-Allow-Headers"] == allowed_headers
+    assert headers["Access-Control-Max-Age"] == "600"
+    assert headers["Vary"] == "Origin"
+
+
 @pytest.fixture(scope="session")
 def nameres_server():
     port = _free_port()
@@ -170,10 +179,31 @@ def test_get_response_includes_solr_compatible_cors_headers(nameres_server):
     status, headers, _ = _request(nameres_server, "/version", headers={"Origin": origin})
 
     assert status == 200
-    assert headers["Access-Control-Allow-Origin"] == origin
-    assert headers["Access-Control-Allow-Credentials"] == "true"
-    assert "GET" in headers["Access-Control-Allow-Methods"]
-    assert "POST" in headers["Access-Control-Allow-Methods"]
-    assert headers["Access-Control-Allow-Headers"] == "*"
-    assert headers["Access-Control-Max-Age"] == "600"
-    assert headers["Vary"] == "Origin"
+    _assert_solr_compatible_cors_headers(headers, origin)
+
+
+@pytest.mark.parametrize(
+    ("path", "requested_method", "requested_headers"),
+    [
+        ("/lookup", "GET", None),
+        ("/bulk-lookup", "POST", "content-type"),
+        ("/synonyms", "POST", "content-type"),
+        ("/status", "GET", None),
+    ],
+)
+def test_preflight_returns_solr_compatible_cors_headers(
+    nameres_server, path: str, requested_method: str, requested_headers: str | None
+):
+    origin = "https://translatorsri.github.io"
+    request_headers = {
+        "Origin": origin,
+        "Access-Control-Request-Method": requested_method,
+    }
+    if requested_headers is not None:
+        request_headers["Access-Control-Request-Headers"] = requested_headers
+
+    status, headers, body = _request(nameres_server, path, method="OPTIONS", headers=request_headers)
+
+    assert status == 200
+    assert body == b""
+    _assert_solr_compatible_cors_headers(headers, origin, requested_headers or "*")

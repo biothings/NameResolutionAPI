@@ -111,6 +111,9 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
         Examples: <"NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955">
         would apply taxa filters for each pipe separated entry
         """
+        if self.request.method == "OPTIONS":
+            return
+
         lookup_strings = self._parse_lookup_string_arguments()
 
         try:
