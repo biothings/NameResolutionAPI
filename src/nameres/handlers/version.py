@@ -1,10 +1,11 @@
 from nameres.handlers.base import NameResolutionBaseHandler
 from nameres.version import get_version
 
+RESOLVED_VERSION = get_version()
+
 
 class VersionHandler(NameResolutionBaseHandler):
     name = "version"
 
     async def get(self, *args, **kwargs):
-        version = get_version()
-        self.write({"version": version})
+        self.write({"version": RESOLVED_VERSION})
