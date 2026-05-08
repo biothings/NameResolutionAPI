@@ -26,7 +26,8 @@ class LookupArgumentException(Exception):
 
 @dataclasses.dataclass()
 class LookupQuery:
-    string: str
+    raw_string: str
+    query_strings: tuple[str, ...]
     autocomplete: Optional[bool]
     highlighting: Optional[bool]
     offset: Optional[int]
@@ -145,9 +146,10 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
             raise LookupArgumentException(lookup_message)
 
         self.lookup_queries = []
-        for search_string in sanitized_lookup_strings:
+        for raw_string, query_strings in sanitized_lookup_strings:
             lookup_query = LookupQuery(
-                string=search_string,
+                raw_string=raw_string,
+                query_strings=query_strings,
                 autocomplete=autocomplete_option,
                 highlighting=highlighting_option,
                 offset=offset_option,
@@ -173,7 +175,7 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
             lookup_strings.extend(search_string_collection)
         return lookup_strings
 
-    def _sanitize_lookup_query(self, lookup_strings: list[str]) -> list[tuple[str]]:
+    def _sanitize_lookup_query(self, lookup_strings: list[str]) -> list[tuple[str, tuple[str, ...]]]:
         r"""Performs input sanitization on the lookup query terms.
 
         Sanitization Operations:
@@ -202,6 +204,7 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
         """
         sanitized_lookup_strings = []
         for lookup_string in lookup_strings:
+            raw_lookup_string = lookup_string
             lookup_string = lookup_string.strip().lower()
 
             windows_smart_single_quote_pattern = r"[‘’]"
@@ -239,7 +242,11 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
                 fully_escaped_lookup_string = fully_escaped_lookup_string.replace("&&", " ")
                 fully_escaped_lookup_string = fully_escaped_lookup_string.replace("||", " ")
 
-                sanitized_lookup_strings.append(set([lookup_string_with_escaped_groups, fully_escaped_lookup_string]))
+                query_strings = [lookup_string_with_escaped_groups]
+                if fully_escaped_lookup_string != lookup_string_with_escaped_groups:
+                    query_strings.append(fully_escaped_lookup_string)
+
+                sanitized_lookup_strings.append((raw_lookup_string, tuple(query_strings)))
 
         return sanitized_lookup_strings
 
@@ -358,22 +365,21 @@ class NameResolutionBulkLookupHandler(BaseNameResolutionLookupHandler):
 
     name = "bulk-lookup"
 
-    async def post(self) -> dict[str, list[dict]]:
+    async def post(self) -> None:
         """Returns cliques with a name or synonym that contains a specified string sent via batch."""
 
         try:
             lookup_results = {}
             for lookup_query in self.lookup_queries:
                 lookup_result: list[dict] = await lookup(self.biothings, lookup_query, self.filters)
-                lookup_key: str = lookup_query.string.pop()
-                lookup_results[lookup_key] = lookup_result
+                lookup_results[lookup_query.raw_string] = lookup_result
         except Exception as gen_exc:
             raise HTTPError(detail="Error occurred during processing.", status_code=500) from gen_exc
         self.finish(lookup_results)
 
 
 async def lookup(
-    biothings_metadata: NameResolutionAPINamespace, lookup_query: list[LookupQuery], filters: dict
+    biothings_metadata: NameResolutionAPINamespace, lookup_query: LookupQuery, filters: dict
 ) -> list[dict]:
     """Returns cliques with a name or synonym that contains a specified string."""
     elasticsearch_query = _build_elasticsearch_query(lookup_query, filters)
@@ -440,11 +446,11 @@ async def lookup(
     return outputs
 
 
-def _build_elasticsearch_query(lookup_query: list[LookupQuery], filters: dict) -> dict:
+def _build_elasticsearch_query(lookup_query: LookupQuery, filters: dict) -> dict:
     queries = []
 
     # Base Query
-    for lookup_string in lookup_query.string:
+    for lookup_string in lookup_query.query_strings:
         queries.append(
             {
                 "multi_match": {
@@ -457,7 +463,7 @@ def _build_elasticsearch_query(lookup_query: list[LookupQuery], filters: dict) -
 
     # https://www.elastic.co/search-labs/blog/elasticsearch-autocomplete-search#2.-query-time
     if lookup_query.autocomplete:
-        for lookup_string in lookup_query.string:
+        for lookup_string in lookup_query.query_strings:
             queries.append(
                 {
                     "multi_match": {

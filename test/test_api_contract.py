@@ -157,12 +157,12 @@ def test_bulk_lookup_post_returns_results_by_input_string(nameres_server):
         nameres_server,
         "/bulk-lookup?limit=1",
         method="POST",
-        body={"strings": ["aspirin", "diabetes"]},
+        body={"strings": ["Aspirin", "diabetes"]},
     )
 
     assert status == 200
-    assert set(body) == {"aspirin", "diabetes"}
-    assert isinstance(body["aspirin"], list)
+    assert set(body) == {"Aspirin", "diabetes"}
+    assert isinstance(body["Aspirin"], list)
     assert isinstance(body["diabetes"], list)
 
 
