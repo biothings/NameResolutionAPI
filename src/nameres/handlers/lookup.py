@@ -204,8 +204,8 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
         """
         sanitized_lookup_strings = []
         for lookup_string in lookup_strings:
-            raw_lookup_string = lookup_string
-            lookup_string = lookup_string.strip().lower()
+            raw_lookup_string = lookup_string.strip()
+            lookup_string = raw_lookup_string.lower()
 
             windows_smart_single_quote_pattern = r"[‘’]"
             windows_smart_double_quote_pattern = r"[“”]"
