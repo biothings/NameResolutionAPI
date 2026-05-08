@@ -1,5 +1,7 @@
 """Shared handler behavior for NameResolution API endpoints."""
 
+import json
+
 from biothings.web.handlers import BaseHandler
 
 
@@ -25,3 +27,7 @@ class NameResolutionBaseHandler(BaseHandler):
 
     def options(self, *args, **kwargs):
         self.finish()
+
+    def finish_json(self, response: dict | list) -> None:
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+        super().finish(json.dumps(response))
