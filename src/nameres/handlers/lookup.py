@@ -11,9 +11,9 @@ import json
 import re
 from typing import Optional
 
-from biothings.web.handlers import BaseHandler
 from tornado.web import HTTPError
 
+from nameres.handlers.base import NameResolutionBaseHandler
 from nameres.namespace import NameResolutionAPINamespace
 
 
@@ -46,7 +46,7 @@ class LookupResult:
     clique_identifier_count: int
 
 
-class BaseNameResolutionLookupHandler(BaseHandler):
+class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
     """
     Base class for both the lookup and bulklookup endpoints
 
@@ -111,6 +111,9 @@ class BaseNameResolutionLookupHandler(BaseHandler):
         Examples: <"NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955">
         would apply taxa filters for each pipe separated entry
         """
+        if self.request.method == "OPTIONS":
+            return
+
         lookup_strings = self._parse_lookup_string_arguments()
 
         try:

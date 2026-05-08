@@ -2,12 +2,12 @@ import logging
 import pathlib
 import git
 
-from biothings.web.handlers import BaseHandler
+from nameres.handlers.base import NameResolutionBaseHandler
 
 logger = logging.getLogger(__name__)
 
 
-class VersionHandler(BaseHandler):
+class VersionHandler(NameResolutionBaseHandler):
     name = "version"
 
     def get_github_commit_hash(self):
