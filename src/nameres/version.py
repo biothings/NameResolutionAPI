@@ -42,10 +42,6 @@ def get_github_commit_hash(source_path: pathlib.Path | None = None) -> str:
         repo_path = source_path or pathlib.Path(__file__).resolve()
         repo = Repo(repo_path, search_parent_directories=True)
 
-        if repo.bare:
-            logger.warning("Git repository not found in directory: %s", repo.working_tree_dir)
-            return UNKNOWN_VERSION
-
         return repo.head.commit.hexsha
     except (InvalidGitRepositoryError, NoSuchPathError) as exc:
         logger.warning("Git repository unavailable for version lookup: %s", exc)
