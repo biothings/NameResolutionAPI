@@ -124,10 +124,10 @@ def test_lookup_get_returns_result_shape(nameres_server):
     status, _, body = _request_json(nameres_server, "/lookup?string=aspirin&limit=1")
 
     assert status == 200
-    assert isinstance(body, dict)
+    assert isinstance(body, list)
     assert body
 
-    first_result = next(iter(body.values()))
+    first_result = body[0]
     assert first_result["curie"]
     assert first_result["label"]
     assert isinstance(first_result["synonyms"], list)
@@ -149,7 +149,7 @@ def test_lookup_accepts_issue_8_query_shape(nameres_server):
     status, _, body = _request_json(nameres_server, f"/lookup?{query}")
 
     assert status == 200
-    assert isinstance(body, dict)
+    assert isinstance(body, list)
 
 
 def test_bulk_lookup_post_returns_results_by_input_string(nameres_server):
@@ -162,14 +162,14 @@ def test_bulk_lookup_post_returns_results_by_input_string(nameres_server):
 
     assert status == 200
     assert set(body) == {"aspirin", "diabetes"}
-    assert isinstance(body["aspirin"], dict)
-    assert isinstance(body["diabetes"], dict)
+    assert isinstance(body["aspirin"], list)
+    assert isinstance(body["diabetes"], list)
 
 
 def test_synonyms_post_returns_known_and_missing_curies(nameres_server):
     lookup_status, _, lookup_body = _request_json(nameres_server, "/lookup?string=aspirin&limit=1")
     assert lookup_status == 200
-    known_curie = next(iter(lookup_body))
+    known_curie = lookup_body[0]["curie"]
 
     status, _, body = _request_json(
         nameres_server,

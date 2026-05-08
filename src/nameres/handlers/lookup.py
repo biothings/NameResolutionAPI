@@ -4,10 +4,9 @@ Lookup endpoints for the name-resolution service
 Converted from SOLR -> Elasticsearch
 """
 
-import collections
 import dataclasses
-import logging
 import json
+import logging
 import re
 from typing import Optional
 
@@ -338,7 +337,7 @@ class NameResolutionLookupHandler(BaseNameResolutionLookupHandler):
             lookup_result = await lookup(self.biothings, self.lookup_queries[0], self.filters)
         except Exception as gen_exc:
             raise HTTPError(detail="Error occurred during processing.", status_code=500) from gen_exc
-        self.finish(lookup_result)
+        self.finish_json(lookup_result)
 
     async def post(self):
         """Returns cliques with a name or synonym that contains a specified string."""
@@ -346,7 +345,7 @@ class NameResolutionLookupHandler(BaseNameResolutionLookupHandler):
             lookup_result = await lookup(self.biothings, self.lookup_queries[0], self.filters)
         except Exception as gen_exc:
             raise HTTPError(detail="Error occurred during processing.", status_code=500) from gen_exc
-        self.finish(lookup_result)
+        self.finish_json(lookup_result)
 
 
 class NameResolutionBulkLookupHandler(BaseNameResolutionLookupHandler):
@@ -359,13 +358,13 @@ class NameResolutionBulkLookupHandler(BaseNameResolutionLookupHandler):
 
     name = "bulk-lookup"
 
-    async def post(self) -> dict[str, collections.OrderedDict]:
+    async def post(self) -> dict[str, list[dict]]:
         """Returns cliques with a name or synonym that contains a specified string sent via batch."""
 
         try:
             lookup_results = {}
             for lookup_query in self.lookup_queries:
-                lookup_result: collections.OrderedDict = await lookup(self.biothings, lookup_query, self.filters)
+                lookup_result: list[dict] = await lookup(self.biothings, lookup_query, self.filters)
                 lookup_key: str = lookup_query.string.pop()
                 lookup_results[lookup_key] = lookup_result
         except Exception as gen_exc:
@@ -375,7 +374,7 @@ class NameResolutionBulkLookupHandler(BaseNameResolutionLookupHandler):
 
 async def lookup(
     biothings_metadata: NameResolutionAPINamespace, lookup_query: list[LookupQuery], filters: dict
-) -> collections.OrderedDict:
+) -> list[dict]:
     """Returns cliques with a name or synonym that contains a specified string."""
     elasticsearch_query = _build_elasticsearch_query(lookup_query, filters)
 
@@ -404,10 +403,7 @@ async def lookup(
     }
     lookup_response = await biothings_metadata.elasticsearch.async_client.search(**search_parameters)
 
-    # https://www.tornadoweb.org/en/stable/web.html#tornado.web.RequestHandler.write
-    # We have to change the API slightly here due to security requirements around returning
-    # list-objects as the API response
-    outputs = collections.OrderedDict()
+    outputs = []
     for doc in lookup_response["hits"]["hits"]:
         preferred_matches = []
         synonym_matches = []
@@ -419,23 +415,25 @@ async def lookup(
 
         source = doc["_source"]
         curie_identifier = source.get("curie", "")
-        outputs[curie_identifier] = dataclasses.asdict(
-            LookupResult(
-                curie=curie_identifier,
-                label=source.get("preferred_name", ""),
-                highlighting=(
-                    {
-                        "labels": preferred_matches,
-                        "synonyms": synonym_matches,
-                    }
-                    if lookup_query.highlighting
-                    else {}
-                ),
-                synonyms=source.get("names", []),
-                score=doc.get("_score", ""),
-                taxa=source.get("taxa", []),
-                clique_identifier_count=source.get("clique_identifier_count", 0),
-                types=[f"biolink:{d}" for d in source.get("biolink_types", [])],
+        outputs.append(
+            dataclasses.asdict(
+                LookupResult(
+                    curie=curie_identifier,
+                    label=source.get("preferred_name", ""),
+                    highlighting=(
+                        {
+                            "labels": preferred_matches,
+                            "synonyms": synonym_matches,
+                        }
+                        if lookup_query.highlighting
+                        else {}
+                    ),
+                    synonyms=source.get("names", []),
+                    score=doc.get("_score", ""),
+                    taxa=source.get("taxa", []),
+                    clique_identifier_count=source.get("clique_identifier_count", 0),
+                    types=[f"biolink:{d}" for d in source.get("biolink_types", [])],
+                )
             )
         )
 
