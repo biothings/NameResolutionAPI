@@ -12,7 +12,6 @@ from biothings.web.applications import TornadoBiothingsAPI
 
 from nameres.handlers import build_handlers
 from nameres.namespace import NameResolutionAPINamespace
-from nameres.version import get_version
 
 logger = logging.getLogger(__name__)
 
@@ -28,5 +27,4 @@ class NameResolutionAPI(TornadoBiothingsAPI):
         settings = namespace.config.webserver["SETTINGS"]
         app = cls(handlers.values(), settings)
         app.biothings = namespace
-        get_version()
         return app

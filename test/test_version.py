@@ -34,6 +34,12 @@ def test_read_version_file_ignores_missing_and_blank_files(tmp_path, monkeypatch
     assert nameres_version.read_version_file([tmp_path / "missing.txt", blank_version_file, version_file]) == "build-sha"
 
 
+def test_read_version_file_allows_empty_fallback_paths(monkeypatch):
+    monkeypatch.delenv(nameres_version.VERSION_FILE_ENV_VAR, raising=False)
+
+    assert nameres_version.read_version_file([]) is None
+
+
 def test_get_version_prefers_build_version_file(monkeypatch):
     monkeypatch.setattr(nameres_version, "read_version_file", lambda: "build-sha")
     monkeypatch.setattr(

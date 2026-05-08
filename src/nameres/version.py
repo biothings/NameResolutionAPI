@@ -21,7 +21,10 @@ def read_version_file(version_file_paths: Iterable[pathlib.Path] | None = None) 
     if configured_path:
         candidate_paths.append(pathlib.Path(configured_path))
 
-    candidate_paths.extend(version_file_paths or [pathlib.Path.cwd() / VERSION_FILE_NAME, CONTAINER_VERSION_FILE])
+    if version_file_paths is None:
+        candidate_paths.extend([pathlib.Path.cwd() / VERSION_FILE_NAME, CONTAINER_VERSION_FILE])
+    else:
+        candidate_paths.extend(version_file_paths)
 
     for version_file_path in candidate_paths:
         try:
