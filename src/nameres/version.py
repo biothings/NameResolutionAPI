@@ -2,8 +2,9 @@ import logging
 import os
 import pathlib
 from collections.abc import Iterable
+from functools import cache
 
-import git
+from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 
 logger = logging.getLogger(__name__)
 
@@ -34,21 +35,26 @@ def read_version_file(version_file_paths: Iterable[pathlib.Path] | None = None) 
     return None
 
 
+@cache
 def get_github_commit_hash(source_path: pathlib.Path | None = None) -> str:
     """Retrieve the current GitHub commit hash using gitpython."""
     try:
         repo_path = source_path or pathlib.Path(__file__).resolve()
-        repo = git.Repo(repo_path, search_parent_directories=True)
+        repo = Repo(repo_path, search_parent_directories=True)
 
         if repo.bare:
-            logger.error("Git repository not found in directory: %s", repo.working_tree_dir)
+            logger.warning("Git repository not found in directory: %s", repo.working_tree_dir)
             return UNKNOWN_VERSION
 
         return repo.head.commit.hexsha
+    except (InvalidGitRepositoryError, NoSuchPathError) as exc:
+        logger.warning("Git repository unavailable for version lookup: %s", exc)
+        return UNKNOWN_VERSION
     except Exception as exc:
-        logger.error("Error getting GitHub commit hash: %s", exc)
+        logger.exception("Error getting GitHub commit hash: %s", exc)
         return UNKNOWN_VERSION
 
 
+@cache
 def get_version() -> str:
     return read_version_file() or get_github_commit_hash()
