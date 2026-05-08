@@ -6,7 +6,7 @@ from biothings.web.handlers import BaseHandler
 class NameResolutionBaseHandler(BaseHandler):
     """Base handler that keeps the lightweight BioThings handler plus CORS."""
 
-    cors_methods = "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT"
+    cors_methods = "GET, POST, OPTIONS"
     cors_max_age = "600"
 
     def set_default_headers(self):

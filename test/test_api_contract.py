@@ -51,7 +51,7 @@ def _request_json(base_url: str, path: str, *, method: str = "GET", body=None, h
 def _assert_solr_compatible_cors_headers(headers, origin: str, allowed_headers: str = "*"):
     assert headers["Access-Control-Allow-Origin"] == origin
     assert headers["Access-Control-Allow-Credentials"] == "true"
-    assert headers["Access-Control-Allow-Methods"] == "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT"
+    assert headers["Access-Control-Allow-Methods"] == "GET, POST, OPTIONS"
     assert headers["Access-Control-Allow-Headers"] == allowed_headers
     assert headers["Access-Control-Max-Age"] == "600"
     assert headers["Vary"] == "Origin"
