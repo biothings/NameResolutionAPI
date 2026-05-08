@@ -3,12 +3,12 @@ from urllib.parse import urlparse
 import elastic_transport
 from elasticsearch import AsyncElasticsearch
 
-from biothings.web.handlers import BaseHandler
+from nameres.handlers.base import NameResolutionBaseHandler
 
 from nameres.biolink import BIOLINK_MODEL_VERSION
 
 
-class NameResolutionHealthHandler(BaseHandler):
+class NameResolutionHealthHandler(NameResolutionBaseHandler):
     """
     Important Endpoints
     * /_cat/nodes

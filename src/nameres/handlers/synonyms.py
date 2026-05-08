@@ -5,14 +5,14 @@ Handler for the synonyms endpoint for nameres
 import json
 import logging
 
-from biothings.web.handlers import BaseHandler
 from tornado.web import HTTPError
 
+from nameres.handlers.base import NameResolutionBaseHandler
 
 logger = logging.getLogger(__name__)
 
 
-class NameResolutionSynonymsHandler(BaseHandler):
+class NameResolutionSynonymsHandler(NameResolutionBaseHandler):
     """
     Handles looking up synonyms based off a particular CURIE.
 
