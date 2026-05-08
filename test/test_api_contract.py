@@ -17,6 +17,15 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+RUN_INTEGRATION_TESTS = os.getenv("NAMERES_RUN_INTEGRATION_TESTS") == "1"
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not RUN_INTEGRATION_TESTS,
+        reason="set NAMERES_RUN_INTEGRATION_TESTS=1 to run local Elasticsearch-backed API contract tests",
+    ),
+]
 
 
 def _free_port() -> int:

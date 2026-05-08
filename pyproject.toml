@@ -124,6 +124,7 @@ testpaths = ["test"]
 
 # Markers
 markers = [
+    "integration: marks tests that require external services",
     "unit",
     "performance"
 ]
