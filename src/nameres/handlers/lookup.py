@@ -456,20 +456,21 @@ def _build_elasticsearch_query(lookup_query: LookupQuery, filters: dict) -> dict
                 "multi_match": {
                     "query": lookup_string,
                     "type": "best_fields",
-                    "fields": ["preferred_name^25", "name^10"],
+                    "fields": ["preferred_name^25", "names^10"],
                 }
             }
         )
 
     # https://www.elastic.co/search-labs/blog/elasticsearch-autocomplete-search#2.-query-time
+    # Autocomplete treats the final query term as incomplete.
     if lookup_query.autocomplete:
         for lookup_string in lookup_query.query_strings:
             queries.append(
                 {
                     "multi_match": {
                         "query": lookup_string,
-                        "type": "phrase",
-                        "fields": ["preferred_name^30", "name^20"],
+                        "type": "phrase_prefix",
+                        "fields": ["preferred_name^30", "names^20"],
                     }
                 }
             )
