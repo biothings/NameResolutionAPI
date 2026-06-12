@@ -108,6 +108,8 @@ class NameResolutionAPINamespace:
         from opentelemetry.sdk.trace.export import BatchSpanProcessor  # pylint: disable=import-outside-toplevel
         from opentelemetry import trace  # pylint: disable=import-outside-toplevel
 
+        TornadoInstrumentor().instrument()
+
         jaeger_host = self.config.telemetry["OPENTELEMETRY_JAEGER_HOST"]
         jaeger_port = self.config.telemetry["OPENTELEMETRY_JAEGER_PORT"]
         otlp_endpoint = f"{jaeger_host}:{jaeger_port}/v1/traces"
