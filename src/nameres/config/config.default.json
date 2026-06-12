@@ -14,8 +14,8 @@
     },
     "elasticsearch": {
         "ES_HOST": "http://localhost:9200",
-        "ES_INDEX": "nameres",
-        "ES_ALIAS": "nameres",
+        "ES_INDEX": "annotator-nameres",
+        "ES_ALIAS": "annotator-nameres",
         "ES_DOC_TYPE": "node",
         "ES_INDICES": {},
         "ES_ARGS": {
