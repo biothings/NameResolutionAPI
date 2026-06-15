@@ -14,8 +14,8 @@
     },
     "elasticsearch": {
         "ES_HOST": "http://localhost:9200",
-        "ES_INDEX": "nameres",
-        "ES_ALIAS": "nameres",
+        "ES_INDEX": "annotator-nameres",
+        "ES_ALIAS": "annotator-nameres",
         "ES_DOC_TYPE": "node",
         "ES_INDICES": {},
         "ES_ARGS": {
@@ -27,6 +27,7 @@
         "OPENTELEMETRY_ENABLED": false,
         "OPENTELEMETRY_SERVICE_NAME": "Nameres",
         "OPENTELEMETRY_JAEGER_HOST": "http://localhost",
-        "OPENTELEMETRY_JAEGER_PORT": 6831
+        "OPENTELEMETRY_JAEGER_PORT": 4318,
+        "OPENTELEMETRY_EXCLUDED_URLS": ["^/$", "^/status$", "^/version$", "^/webapp", "^/favicon\\.ico$"]
     }
 }

@@ -6,7 +6,7 @@ ARG NAMERES_BRANCH=main
 WORKDIR /build/nameres
 RUN git clone -b ${NAMERES_BRANCH} --recursive ${NAMERES_REPO} .
 RUN git rev-parse HEAD > /build/nameres/version.txt
-RUN pip wheel --wheel-dir=/build/wheels /build/nameres
+RUN pip wheel --wheel-dir=/build/wheels /build/nameres[telemetry]
 
 FROM caddy:2.8-builder AS caddy_builder
 RUN xcaddy build
