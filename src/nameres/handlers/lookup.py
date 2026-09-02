@@ -395,7 +395,7 @@ async def lookup(
             "require_field_match": False,
             "fields": {
                 "names": {"pre_tags": ["<strong>"], "post_tags": ["</strong>"]},
-                "preferred_names": {"pre_tags": ["<strong>"], "post_tags": ["</strong>"]},
+                "preferred_name": {"pre_tags": ["<strong>"], "post_tags": ["</strong>"]},
             },
         }
 
