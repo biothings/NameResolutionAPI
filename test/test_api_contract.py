@@ -18,12 +18,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN_INTEGRATION_TESTS = os.getenv("NAMERES_RUN_INTEGRATION_TESTS") == "1"
+NAMERES_BASE_URL = os.getenv("NAMERES_BASE_URL")
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        not RUN_INTEGRATION_TESTS,
-        reason="set NAMERES_RUN_INTEGRATION_TESTS=1 to run local Elasticsearch-backed API contract tests",
+        not RUN_INTEGRATION_TESTS and not NAMERES_BASE_URL,
+        reason="set NAMERES_RUN_INTEGRATION_TESTS=1 or NAMERES_BASE_URL to run API contract tests",
     ),
 ]
 
@@ -54,7 +55,15 @@ def _request(base_url: str, path: str, *, method: str = "GET", body=None, header
 
 def _request_json(base_url: str, path: str, *, method: str = "GET", body=None, headers=None):
     status, response_headers, response_body = _request(base_url, path, method=method, body=body, headers=headers)
-    return status, response_headers, json.loads(response_body.decode("utf-8"))
+    response_text = response_body.decode("utf-8", errors="replace")
+    try:
+        parsed_body = json.loads(response_text)
+    except json.JSONDecodeError:
+        pytest.fail(
+            f"Expected JSON response from {method} {path}, got HTTP {status} "
+            f"{response_headers.get('Content-Type', '')}: {response_text[:500]}"
+        )
+    return status, response_headers, parsed_body
 
 
 def _assert_solr_compatible_cors_headers(headers, origin: str, allowed_headers: str = "*"):
@@ -68,6 +77,10 @@ def _assert_solr_compatible_cors_headers(headers, origin: str, allowed_headers: 
 
 @pytest.fixture(scope="session")
 def nameres_server():
+    if NAMERES_BASE_URL:
+        yield NAMERES_BASE_URL.rstrip("/")
+        return
+
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
     env = os.environ.copy()
