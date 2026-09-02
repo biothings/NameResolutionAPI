@@ -263,7 +263,9 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
         In this case we to boolean AND NOT specific different types of required
         fields we want to ensure `don't` exist in the results output
         """
-        biolink_types = self.get_argument("biolink_types", default=[], strip=True)
+
+        # to cover both the singular and plural biolink_type arguments, we combine them into a single list
+        biolink_types = [*self.get_arguments("biolink_types"), *self.get_arguments("biolink_type")]
 
         filter_delimiter = "|"
 
@@ -295,8 +297,8 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
         # Elasticsearch should
         for biolink_type in biolink_types:
             biolink_type = biolink_type.strip()
-            if biolink_type is not None:
-                should_filter = {"term": {"biolink_types": biolink_type.remove("biolink:")}}
+            if biolink_type:
+                should_filter = {"term": {"biolink_types": biolink_type.removeprefix("biolink:")}}
                 filters["should"].append(should_filter)
 
         # Prefix: only filter
