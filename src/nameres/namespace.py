@@ -207,12 +207,6 @@ class NameResolutionAPINamespace:
                 with open(optional_configuration, "r", encoding="utf-8") as handle:
                     configuration.update(json.load(handle))
 
-        # Force the static path to the webapp directory
-        package_directory = importlib.resources.files(nameres)
-        webapp_directory = package_directory.joinpath("webapp")
-        configuration["webserver"]["SETTINGS"]["static_path"] = str(webapp_directory)
-        configuration["webserver"]["SETTINGS"]["static_url_prefix"] = "/"
-
         configuration_namespace = types.SimpleNamespace(**configuration)
 
         # override options
