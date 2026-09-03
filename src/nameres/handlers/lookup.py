@@ -291,43 +291,30 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
             pass
 
         # Apply filters as needed.
-        filters = {"should": [], "must_not": []}
+        es_filters = {"must": [], "must_not": []}
 
-        # Biolink type filter
-        # Elasticsearch should
-        for biolink_type in biolink_types:
-            biolink_type = biolink_type.strip()
-            if biolink_type:
-                should_filter = {"term": {"biolink_types": biolink_type.removeprefix("biolink:")}}
-                filters["should"].append(should_filter)
-
-        # Prefix: only filter
-        # Elasticsearch should + Match boolean prefix query
-        for prefix in only_prefixes:
-            prefix = prefix.strip()
-            should_filter = {"prefix": {"curie": prefix}}
-            filters["should"].append(should_filter)
+        # OR-relationship within each group, chained with AND-relationship between groups.
+        for values, build in [
+            (biolink_types, lambda v: {"term": {"biolink_types": v.removeprefix("biolink:")}}),
+            (only_prefixes, lambda v: {"prefix": {"curie": v}}),
+            (only_taxa, lambda v: {"term": {"taxa": v}}),
+        ]:
+            should_filters = [build(s) for v in values if (s := v.strip())]
+            if should_filters:
+                es_filters["must"].append({"bool": {"should": should_filters}})
 
         # Prefix: exclude filter
         # Elasticsearch must not
         for prefix in exclude_prefixes:
             prefix = prefix.strip()
             must_not_filter = {"prefix": {"curie": prefix}}
-            filters["must_not"].append(must_not_filter)
-
-        # Taxa filter.
-        # only_taxa is like: 'NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955'
-        # Elasticsearch should
-        for taxon in only_taxa:
-            taxon = taxon.strip()
-            should_filter = {"term": {"taxa": taxon}}
-            filters["should"].append(should_filter)
+            es_filters["must_not"].append(must_not_filter)
 
         # We also need to include entries that don't have taxa specified.
         # TODO Skipping for the moment as we need to update the index
-        # filters["should"].append({ "term" : { "taxon_specific" : False } }
+        # { "term" : { "taxon_specific" : False } }
 
-        return filters
+        return es_filters
 
 
 class NameResolutionLookupHandler(BaseNameResolutionLookupHandler):
@@ -488,10 +475,11 @@ def _build_elasticsearch_query(lookup_query: LookupQuery, filters: dict) -> dict
             ]
         }
     }
-    if len(filters["should"]) > 0:
-        compound_lookup_query["bool"]["must"].append({"bool": {"should": [*filters["should"]]}})
 
-    if len(filters["must_not"]) > 0:
-        compound_lookup_query["bool"]["must_not"] = [*filters["must_not"]]
+
+    # populate must and must_not filters in compound_lookup_query
+    for key in ["must", "must_not"]:
+        if len(filters[key]) > 0:
+            compound_lookup_query["bool"].setdefault(key, []).extend(filters[key])
 
     return compound_lookup_query
