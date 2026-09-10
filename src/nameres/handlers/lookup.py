@@ -6,7 +6,6 @@ Converted from SOLR -> Elasticsearch
 
 import dataclasses
 import json
-import logging
 import re
 from typing import Optional
 
@@ -16,12 +15,11 @@ from nameres.handlers.base import NameResolutionBaseHandler
 from nameres.namespace import NameResolutionAPINamespace
 
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+class LookupArgumentException(HTTPError):
+    """A lookup request that does not match the advertised API contract."""
 
-
-class LookupArgumentException(Exception):
-    pass
+    def __init__(self, message: str = "Invalid lookup request"):
+        super().__init__(status_code=422, reason=message)
 
 
 @dataclasses.dataclass()
@@ -57,13 +55,40 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
     things in the way we expect for elasticsearch
     """
 
+    accepts_json_body = False
+    json_body_options: frozenset[str] = frozenset()
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.lookup_queries: list[LookupQuery] = None
         self.filters: dict = None
+        self.json_body_arguments: dict[str, object] = {}
+
+    def write_error(self, status_code: int, **kwargs) -> None:
+        """Return lookup validation failures in the documented JSON shape."""
+        exception = kwargs.get("exc_info", (None, None, None))[1]
+        if isinstance(exception, LookupArgumentException):
+            self.finish_json(
+                {
+                    "detail": [
+                        {
+                            "loc": ["request"],
+                            "msg": exception.reason,
+                            "type": "value_error",
+                        }
+                    ]
+                }
+            )
+            return
+
+        super().write_error(status_code, **kwargs)
 
     def prepare(self) -> None:
         """Handles argument parsing any lookup requests.
+
+        ``/lookup`` reads its search string and options from URL query arguments.
+        ``/bulk-lookup`` reads the advertised JSON body, with URL query arguments
+        retained as a backwards-compatible fallback for omitted body options.
 
         Argument Matrix:
         | argument_name    | type      | required | default |
@@ -73,7 +98,7 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
         | highlighting     | bool      | False    | False   |
         | offset           | int       | False    | 0       |
         | limit            | int       | False    | 10      |
-        | biolink_type     | list[str] | False    | []      |
+        | biolink_type(s)  | list[str] | False    | []      |
         | only_prefixes    | str       | False    | None    |
         | exclude_prefixes | str       | False    | None    |
         | only_taxa        | str       | False    | None    |
@@ -99,7 +124,9 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
         biolink_types: The Biolink types to filter to (with or without the `biolink:` prefix).
         Examples: <["biolink:Disease", "biolink:PhenotypicFeature"]>, would apply
         filtering for the types `biolink:Disease` OR `biolink:PhenotypicFeature`.
-        Results with either would result in a match
+        Results with either would result in a match. For ``/lookup``, the singular
+        ``biolink_type`` query parameter is repeatable and ``biolink_types`` is an
+        accepted alias. The bulk JSON body uses the ``biolink_types`` array.
 
         only_prefixes: Pipe-separated, case-sensitive list of prefixes to filter.
         Examples: <"MONDO|EFO">, would apply filters for `MONDO` OR `EFO`
@@ -114,14 +141,9 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
         if self.request.method == "OPTIONS":
             return
 
+        self.json_body_arguments = self._parse_json_body_arguments() if self.accepts_json_body else {}
         lookup_strings = self._parse_lookup_string_arguments()
-
-        try:
-            sanitized_lookup_strings = self._sanitize_lookup_query(lookup_strings)
-        except Exception as lookup_arg_exc:
-            logger.error("Unknown issue occured attempting to sanitize input query")
-            logger.exception(lookup_arg_exc)
-            raise LookupArgumentException from lookup_arg_exc
+        sanitized_lookup_strings = self._sanitize_lookup_query(lookup_strings)
 
         self.filters = self._build_lookup_filters()
 
@@ -132,14 +154,14 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
                 return not argument.lower() == "false"
             return False
 
-        autocomplete_option = parse_boolean(self.get_argument("autocomplete", default=False, strip=True))
-        highlighting_option = parse_boolean(self.get_argument("highlighting", default=False, strip=True))
+        autocomplete_option = parse_boolean(self._get_lookup_argument("autocomplete", default=False, strip=True))
+        highlighting_option = parse_boolean(self._get_lookup_argument("highlighting", default=False, strip=True))
         try:
-            offset_option = int(self.get_argument("offset", default=0, strip=True))
-            limit_option = int(self.get_argument("limit", default=10, strip=True))
+            offset_option = int(self._get_lookup_argument("offset", default=0, strip=True))
+            limit_option = int(self._get_lookup_argument("limit", default=10, strip=True))
             if offset_option < 0 or limit_option < 0:
                 raise ValueError
-        except ValueError:
+        except (TypeError, ValueError):
             lookup_message = (
                 "Invalid literal for `offset` or `limit` option | " "offset and limit must be non-negative integers "
             )
@@ -157,21 +179,104 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
             )
             self.lookup_queries.append(lookup_query)
 
+    def _parse_json_body_arguments(self) -> dict[str, object]:
+        """Decode a request JSON object once so bulk options can share it."""
+        if not self.request.body:
+            return {}
+
+        try:
+            body_arguments = json.loads(self.request.body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as json_exc:
+            raise LookupArgumentException("Lookup request body must be valid JSON") from json_exc
+
+        if not isinstance(body_arguments, dict):
+            raise LookupArgumentException("Lookup request body must be a JSON object")
+
+        scalar_types = {
+            "autocomplete": (bool, "a boolean"),
+            "highlighting": (bool, "a boolean"),
+            "offset": (int, "an integer"),
+            "limit": (int, "an integer"),
+            "only_prefixes": (str, "a string"),
+            "exclude_prefixes": (str, "a string"),
+            "only_taxa": (str, "a string"),
+        }
+        for name, (expected_type, description) in scalar_types.items():
+            argument = body_arguments.get(name)
+            if name in body_arguments and argument is not None and type(argument) is not expected_type:
+                raise LookupArgumentException(f"`{name}` must be {description}")
+
+        strings = body_arguments.get("strings")
+        if "strings" in body_arguments and (
+            not isinstance(strings, list) or not all(isinstance(argument, str) for argument in strings)
+        ):
+            raise LookupArgumentException("`strings` must be an array of strings")
+
+        biolink_types = body_arguments.get("biolink_types")
+        if (
+            "biolink_types" in body_arguments
+            and biolink_types is not None
+            and (
+                not isinstance(biolink_types, list) or not all(isinstance(argument, str) for argument in biolink_types)
+            )
+        ):
+            raise LookupArgumentException("`biolink_types` must be an array of strings")
+
+        return body_arguments
+
+    def _get_lookup_argument(self, name: str, *, default=None, strip: bool = True):
+        """Read a bulk JSON option, falling back to the URL query argument."""
+        if name in self.json_body_options and name in self.json_body_arguments:
+            argument = self.json_body_arguments[name]
+            if argument is None:
+                return default
+            if strip and isinstance(argument, str):
+                return argument.strip()
+            return argument
+
+        return self.get_argument(name, default=default, strip=strip)
+
+    def _get_lookup_arguments(self, name: str, *aliases: str) -> list[str]:
+        """Read a list-valued bulk JSON option or its URL query aliases."""
+        if name in self.json_body_options and name in self.json_body_arguments:
+            arguments = self.json_body_arguments[name]
+            if arguments is None:
+                return []
+            if not isinstance(arguments, list) or not all(isinstance(argument, str) for argument in arguments):
+                raise LookupArgumentException(f"`{name}` must be an array of strings")
+            return arguments
+
+        return [argument for query_name in (name, *aliases) for argument in self.get_arguments(query_name)]
+
+    def _get_pipe_delimited_lookup_argument(self, name: str) -> list[str]:
+        """Parse one of the pipe-delimited filter options."""
+        argument = self._get_lookup_argument(name, default="", strip=True)
+        if not isinstance(argument, str):
+            raise LookupArgumentException(f"`{name}` must be a string")
+        return [value for value in argument.split("|") if value.strip()]
+
     def _parse_lookup_string_arguments(self) -> list[str]:
         """Attempt to determine if this is a singular or bulk lookup."""
         search_string = self.get_argument("string", default=None)
-        search_string_collection = json.loads(self.request.body).get("strings", None) if self.request.body else None
+        missing = object()
+        search_string_collection = self.json_body_arguments.get("strings", missing)
 
-        if search_string is None and search_string_collection is None:
+        if search_string_collection is not missing and (
+            not isinstance(search_string_collection, list)
+            or not all(isinstance(search_string, str) for search_string in search_string_collection)
+        ):
+            raise LookupArgumentException("`strings` must be an array of strings")
+
+        if search_string is None and search_string_collection is missing:
             raise LookupArgumentException("Either `string` or `strings` must be supplied for lookup")
 
-        if search_string is not None and search_string_collection is not None:
+        if search_string is not None and search_string_collection is not missing:
             raise LookupArgumentException("Both `string` or `strings` cannot both be supplied for lookup")
 
         lookup_strings = []
-        if search_string is not None and search_string_collection is None:
+        if search_string is not None and search_string_collection is missing:
             lookup_strings.append(search_string)
-        elif search_string is None and search_string_collection is not None:
+        elif search_string is None and search_string_collection is not missing:
             lookup_strings.extend(search_string_collection)
         return lookup_strings
 
@@ -258,31 +363,11 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
         represented as ``must_not`` clauses.
         """
 
-        # to cover both the singular and plural biolink_type arguments, we combine them into a single list
-        biolink_types = [*self.get_arguments("biolink_types"), *self.get_arguments("biolink_type")]
-
-        filter_delimiter = "|"
-
-        only_prefixes = self.get_argument("only_prefixes", default="", strip=True)
-        only_prefixes = only_prefixes.split(filter_delimiter)
-        try:
-            only_prefixes.remove("")
-        except ValueError:
-            pass
-
-        exclude_prefixes = self.get_argument("exclude_prefixes", default="", strip=True)
-        exclude_prefixes = exclude_prefixes.split(filter_delimiter)
-        try:
-            exclude_prefixes.remove("")
-        except ValueError:
-            pass
-
-        only_taxa = self.get_argument("only_taxa", default="", strip=True)
-        only_taxa = only_taxa.split(filter_delimiter)
-        try:
-            only_taxa.remove("")
-        except ValueError:
-            pass
+        # The singular spelling remains supported as a URL-query compatibility alias.
+        biolink_types = self._get_lookup_arguments("biolink_types", "biolink_type")
+        only_prefixes = self._get_pipe_delimited_lookup_argument("only_prefixes")
+        exclude_prefixes = self._get_pipe_delimited_lookup_argument("exclude_prefixes")
+        only_taxa = self._get_pipe_delimited_lookup_argument("only_taxa")
 
         # Apply filters as needed.
         es_filters = {"filter": [], "must_not": []}
@@ -347,6 +432,19 @@ class NameResolutionBulkLookupHandler(BaseNameResolutionLookupHandler):
     """
 
     name = "bulk-lookup"
+    accepts_json_body = True
+    json_body_options = frozenset(
+        {
+            "autocomplete",
+            "highlighting",
+            "offset",
+            "limit",
+            "biolink_types",
+            "only_prefixes",
+            "exclude_prefixes",
+            "only_taxa",
+        }
+    )
 
     async def post(self) -> None:
         """Returns cliques with a name or synonym that contains a specified string sent via batch."""

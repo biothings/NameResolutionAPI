@@ -15,7 +15,6 @@ from urllib.parse import urlencode
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 RUN_INTEGRATION_TESTS = os.getenv("NAMERES_RUN_INTEGRATION_TESTS") == "1"
 NAMERES_BASE_URL = os.getenv("NAMERES_BASE_URL")
@@ -168,15 +167,42 @@ def test_lookup_accepts_issue_8_query_shape(nameres_server):
 def test_bulk_lookup_post_returns_results_by_input_string(nameres_server):
     status, _, body = _request_json(
         nameres_server,
-        "/bulk-lookup?limit=1",
+        "/bulk-lookup?limit=0",
         method="POST",
-        body={"strings": [" Aspirin ", "diabetes"]},
+        body={"strings": [" Aspirin ", "diabetes"], "limit": 1},
     )
 
     assert status == 200
     assert set(body) == {"Aspirin", "diabetes"}
     assert isinstance(body["Aspirin"], list)
     assert isinstance(body["diabetes"], list)
+    assert len(body["Aspirin"]) == 1
+    assert len(body["diabetes"]) == 1
+
+
+def test_bulk_lookup_query_options_remain_a_fallback(nameres_server):
+    status, _, body = _request_json(
+        nameres_server,
+        "/bulk-lookup?limit=0",
+        method="POST",
+        body={"strings": ["aspirin"]},
+    )
+
+    assert status == 200
+    assert body == {"aspirin": []}
+
+
+def test_bulk_lookup_json_filter_options_are_applied(nameres_server):
+    status, _, body = _request_json(
+        nameres_server,
+        "/bulk-lookup",
+        method="POST",
+        body={"strings": ["aspirin"], "only_prefixes": "CHEBI"},
+    )
+
+    assert status == 200
+    assert body["aspirin"]
+    assert all(result["curie"].startswith("CHEBI:") for result in body["aspirin"])
 
 
 def test_synonyms_post_returns_known_and_missing_curies(nameres_server):
