@@ -16,7 +16,13 @@ services to leverage the same backend to simplify how we store all of our node a
 #### elasticsearch lookup query
 
 The elasticsearch implementation effectively copied the singular main method leveraged in the solr
-fastapi version. So the argument structure is the same for both
+fastapi version. The compatibility target for the recent filter work is the deployed Solr
+[`v1.5.2` implementation](https://github.com/NCATSTranslator/NameResolution/blob/9788e6f618814357f9e2b27e74fd9cc4dbb1d694/api/server.py#L517-L590).
+
+`/lookup` takes its arguments from URL query parameters. The advertised `/bulk-lookup` contract takes
+a JSON object with a required `strings` array and the same lookup options. In this implementation, a
+bulk option in the JSON body takes precedence; an option omitted from the body may fall back to its
+URL query parameter.
 
 ```shell
 Argument Matrix:
@@ -49,11 +55,13 @@ used for result pagination
 
 limit: The number of results to return.
 Limit must be in the range [0, 1000]. Primarily used for result pagination
+(This is the legacy/OpenAPI contract; the Elasticsearch handler currently checks only that it is non-negative.)
 
 biolink_types: The Biolink types to filter to (with or without the `biolink:` prefix).
 Examples: <["biolink:Disease", "biolink:PhenotypicFeature"]>, would apply
 filtering for the types `biolink:Disease` OR `biolink:PhenotypicFeature`.
-Results with either would result in a match
+Results with either would result in a match. `/lookup` uses the repeatable singular
+`biolink_type` parameter (and accepts `biolink_types` as an alias); bulk JSON uses `biolink_types`.
 
 only_prefixes: Pipe-separated, case-sensitive list of prefixes to filter.
 Examples: <"MONDO|EFO">, would apply filters for `MONDO` OR `EFO`
@@ -97,10 +105,11 @@ Sanitization Operations:
 
 
 ```python
-def _sanitize_lookup_query(self, lookup_strings: list[str]) -> list[tuple[str]]:
+def _sanitize_lookup_query(self, lookup_strings: list[str]) -> list[tuple[str, tuple[str, ...]]]:
     sanitized_lookup_strings = []
     for lookup_string in lookup_strings:
-        lookup_string = lookup_string.strip().lower()
+        raw_lookup_string = lookup_string.strip()
+        lookup_string = raw_lookup_string.lower()
 
         windows_smart_single_quote_pattern = r"[‘’]"
         windows_smart_double_quote_pattern = r"[“”]"
@@ -137,7 +146,11 @@ def _sanitize_lookup_query(self, lookup_strings: list[str]) -> list[tuple[str]]:
             fully_escaped_lookup_string = fully_escaped_lookup_string.replace("&&", " ")
             fully_escaped_lookup_string = fully_escaped_lookup_string.replace("||", " ")
 
-            sanitized_lookup_strings.append(set([lookup_string_with_escaped_groups, fully_escaped_lookup_string]))
+            query_strings = [lookup_string_with_escaped_groups]
+            if fully_escaped_lookup_string != lookup_string_with_escaped_groups:
+                query_strings.append(fully_escaped_lookup_string)
+
+            sanitized_lookup_strings.append((raw_lookup_string, tuple(query_strings)))
 
     return sanitized_lookup_strings
 ```
@@ -146,6 +159,11 @@ def _sanitize_lookup_query(self, lookup_strings: list[str]) -> list[tuple[str]]:
 
 We have 4 different filters we have to apply to our query depending on what the user
 supplies
+
+Values within one positive filter category are combined with OR. Separately supplied categories
+are combined with AND. This matches the deployed Solr implementation, which sends each category as
+a separate filter. These constraints restrict which documents can match but do not affect their
+relevance scores.
 
 1) biolink-type
 If the user supplies a biolink-type or a collection of biolink-types, we have to apply a filter
@@ -230,89 +248,54 @@ in a `should` clause, along with the same `term` query
 }
 ```
 
-This is different from solr, but only syntatically. We have to include these filters within
-the main query in elasticsearch, whereas solr provides a filter in the query that includes 
-boolean logic combining the field:value pairs in a similar fashion to our `should` and `must_not`
-clauses above
+The Elasticsearch syntax differs from Solr, but the intended semantics are the same. Elasticsearch
+uses `bool.filter` for the positive category groups and `bool.must_not` for exclusions. Solr sends a
+list through its `filter` request property. Both forms AND the separately supplied categories and
+keep them out of relevance scoring.
 
 
 ```python
 def _build_lookup_filters(self) -> dict:
-    """Handles the parsing and building of various elasticsearch boolean logic queries.
+    """Build non-scoring Elasticsearch filters for lookup requests.
 
-    We have two types of boolean logic queries we need to build for this endpoint
-
-    1) should
-    In this case we want to boolean OR specific different types of required
-    fields we want in the results output
-
-    2) must_not
-    In this case we to boolean AND NOT specific different types of required
-    fields we want to ensure `don't` exist in the results output
+    Values within a positive filter category are combined with OR, while
+    separate categories are combined with AND. Excluded prefixes are
+    represented as ``must_not`` clauses.
     """
-    biolink_types = self.get_argument("biolink_types", default=[], strip=True)
 
-    filter_delimiter = "|"
-
-    only_prefixes = self.get_argument("only_prefixes", default="", strip=True)
-    only_prefixes = only_prefixes.split(filter_delimiter)
-    try:
-        only_prefixes.remove("")
-    except ValueError:
-        pass
-
-    exclude_prefixes = self.get_argument("exclude_prefixes", default="", strip=True)
-    exclude_prefixes = exclude_prefixes.split(filter_delimiter)
-    try:
-        exclude_prefixes.remove("")
-    except ValueError:
-        pass
-
-    only_taxa = self.get_argument("only_taxa", default="", strip=True)
-    only_taxa = only_taxa.split(filter_delimiter)
-    try:
-        only_taxa.remove("")
-    except ValueError:
-        pass
+    # The singular spelling remains supported as a URL-query compatibility alias.
+    biolink_types = self._get_lookup_arguments("biolink_types", "biolink_type")
+    only_prefixes = self._get_pipe_delimited_lookup_argument("only_prefixes")
+    exclude_prefixes = self._get_pipe_delimited_lookup_argument("exclude_prefixes")
+    only_taxa = self._get_pipe_delimited_lookup_argument("only_taxa")
 
     # Apply filters as needed.
-    filters = {"should": [], "must_not": []}
+    es_filters = {"filter": [], "must_not": []}
 
-    # Biolink type filter
-    # Elasticsearch should
-    for biolink_type in biolink_types:
-        biolink_type = biolink_type.strip()
-        if biolink_type is not None:
-            should_filter = {"term": {"biolink_types": biolink_type.remove("biolink:")}}
-            filters["should"].append(should_filter)
-
-    # Prefix: only filter
-    # Elasticsearch should + Match boolean prefix query
-    for prefix in only_prefixes:
-        prefix = prefix.strip()
-        should_filter = {"prefix": {"curie": prefix}}
-        filters["should"].append(should_filter)
+    # OR-relationship within each group, chained with AND-relationship between groups.
+    for values, build in [
+        (biolink_types, lambda v: {"term": {"biolink_types": v.removeprefix("biolink:")}}),
+        (only_prefixes, lambda v: {"prefix": {"curie": v}}),
+        (only_taxa, lambda v: {"term": {"taxa": v}}),
+    ]:
+        should_filters = [build(s) for v in values if (s := v.strip())]
+        if should_filters:
+            es_filters["filter"].append(
+                {"bool": {"should": should_filters, "minimum_should_match": 1}}
+            )
 
     # Prefix: exclude filter
     # Elasticsearch must not
     for prefix in exclude_prefixes:
         prefix = prefix.strip()
         must_not_filter = {"prefix": {"curie": prefix}}
-        filters["must_not"].append(must_not_filter)
-
-    # Taxa filter.
-    # only_taxa is like: 'NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955'
-    # Elasticsearch should
-    for taxon in only_taxa:
-        taxon = taxon.strip()
-        should_filter = {"term": {"taxa": taxon}}
-        filters["should"].append(should_filter)
+        es_filters["must_not"].append(must_not_filter)
 
     # We also need to include entries that don't have taxa specified.
     # TODO Skipping for the moment as we need to update the index
-    # filters["should"].append({ "term" : { "taxon_specific" : False } }
+    # { "term" : { "taxon_specific" : False } }
 
-    return filters
+    return es_filters
 ```
 
 
@@ -332,14 +315,14 @@ our lookup. The overall structure of the query is the following:
                             "multi_match": {
                                 "query": lookup_string0,
                                 "type": "best_fields",
-                                "fields": ["preferred_name^25", "name^10"],
+                                "fields": ["preferred_name^25", "names^10"],
                             }
                         },
                         {
                             "multi_match": {
                                 "query": lookup_string1,
                                 "type": "best_fields",
-                                "fields": ["preferred_name^25", "name^10"],
+                                "fields": ["preferred_name^25", "names^10"],
                             }
                         },
 
@@ -348,67 +331,71 @@ our lookup. The overall structure of the query is the following:
                         {
                             "multi_match": {
                                 "query": lookup_string0,
-                                "type": "phrase",
-                                "fields": ["preferred_name^30", "name^20"],
+                                "type": "phrase_prefix",
+                                "fields": ["preferred_name^30", "names^20"],
                             }
                         },
                         {
                             "multi_match": {
                                 "query": lookup_string1,
-                                "type": "phrase",
-                                "fields": ["preferred_name^30", "name^20"],
+                                "type": "phrase_prefix",
+                                "fields": ["preferred_name^30", "names^20"],
                             }
                         }
                     ]
                 }
-            },
-            {
-                "should":[<insert should filters>]
             }
-        ]
-    },
-    "must_not": [<insert must_not filters>]
+        ],
+        "filter": [
+            {
+                "bool": {
+                    "should": [<insert filters for one positive category>],
+                    "minimum_should_match": 1
+                }
+            }
+        ],
+        "must_not": [<insert excluded-prefix filters>]
+    }
 }
 ```
 
-The `dis_max` (disjunction maximization) filter in this case will return documents that match one of
-more of the provided queries. If multiple match than it selects amongest the highest relevance
-scoring with tie breaking capabilities based off additional submatching. The original solr index
-leveraged a more advanced version called the extended disjunction max query that is specific to
-solr. Elasticsearch doesn't currently implement this version so we leverage the standard `dis_max`.
-From the string search santization we break each query into a separate `multi_match`. This is also
-how we incorporate the autocomplete version, as we also extend additional queries to leverage
-`phrase` based matches compared to the standard of `best_fields`
+The `dis_max` (disjunction max) query returns documents that match one or more of its alternatives
+and uses the highest-scoring match as the score. No `tie_breaker` is currently configured. The Solr
+implementation uses the richer eDisMax query parser, so Elasticsearch `dis_max` is an approximation,
+not a direct equivalent. Sanitization can produce more than one query string, each represented by a
+`multi_match`. Autocomplete adds `phrase_prefix` alternatives alongside the standard `best_fields`
+queries.
 
 
 
 ```python
 
 # elasticsearch query
-def _build_elasticsearch_query(lookup_query: list[LookupQuery], filters: dict) -> dict:
+def _build_elasticsearch_query(lookup_query: LookupQuery, filters: dict) -> dict:
     queries = []
 
     # Base Query
-    for lookup_string in lookup_query.string:
+    for lookup_string in lookup_query.query_strings:
         queries.append(
             {
                 "multi_match": {
                     "query": lookup_string,
                     "type": "best_fields",
-                    "fields": ["preferred_name^25", "name^10"],
+                    "fields": ["preferred_name^25", "names^10"],
                 }
             }
         )
 
     # https://www.elastic.co/search-labs/blog/elasticsearch-autocomplete-search#2.-query-time
+    # Autocomplete treats the final query term as incomplete.
     if lookup_query.autocomplete:
-        for lookup_string in lookup_query.string:
+        for lookup_string in lookup_query.query_strings:
             queries.append(
                 {
                     "multi_match": {
                         "query": lookup_string,
-                        "type": "phrase",
-                        "fields": ["preferred_name^30", "name^20"],
+                        "type": "phrase_prefix",
+                        "fields": ["preferred_name^30", "names^20"],
                     }
                 }
             )
@@ -424,11 +411,10 @@ def _build_elasticsearch_query(lookup_query: list[LookupQuery], filters: dict) -
             ]
         }
     }
-    if len(filters["should"]) > 0:
-        compound_lookup_query["bool"]["must"].append({"bool": {"should": [*filters["should"]]}})
-
-    if len(filters["must_not"]) > 0:
-        compound_lookup_query["bool"]["must_not"] = [*filters["must_not"]]
+    # Keep constraints in filter context so they do not affect name-match scores.
+    for key in ["filter", "must_not"]:
+        if len(filters[key]) > 0:
+            compound_lookup_query["bool"].setdefault(key, []).extend(filters[key])
 
     return compound_lookup_query
 
@@ -478,18 +464,19 @@ params = {
 ##### Future Work and Optimizations
 
 * Future Work
-    * Need to figure out how incorporate boosting leveraging the `clique_identifier_count` 
-    * Add the `taxon_specific` field to the index. I missed this when looking through the solr schema.
-        Only used in taxon filtering at the moment
+    * Elasticsearch currently uses `clique_identifier_count` as a secondary sort, but does not reproduce
+        Solr's multiplicative `log(sum(clique_identifier_count, 1))` score boost.
+    * Decide which taxon behavior is the compatibility target. Deployed Solr `v1.5.2` filters only on the
+        requested taxa, while newer upstream Solr also admits records with `taxon_specific:false`; the
+        Elasticsearch index does not currently expose that field.
     * We have a difference in the index as they created custom field types that duplicate the
     some of the content of the field in the index that likely increases the size by a moderate amount.
     At the moment I haven't done this to see if we even need to perform the additional indexing. The
     additional fields and solr indexing is shown below
     * Likely some more rigorous testing akin to what we did with nodenorm. Will be harder due to the
         difference in scoring
-    * Discuss with UI team what they require from an autocomplete perspective. The `autocomplete` option
-        more just searches for phrases rather than terms, and more advanced runtime autocomplete options
-        exists within elasticsearch
+    * Compare Elasticsearch's `phrase_prefix` autocomplete behavior with Solr's trailing-wildcard query
+        and confirm the UI requirements.
 
 
 ```shell
@@ -566,14 +553,14 @@ params = {
         {
             "name":"types",
             "type":"string",
-            "stored":true
+            "stored":true,
             "multiValued":true
         },
         {
             "name":"shortest_name_length",
             "type":"pint",
             "stored":true
-    	  },
+        },
         {
             "name":"curie_suffix",
             "type":"plong",
