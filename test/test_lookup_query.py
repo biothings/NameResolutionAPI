@@ -21,14 +21,15 @@ def test_biolink_type_filters_accept_singular_and_plural_arguments():
     filters = BaseNameResolutionLookupHandler._build_lookup_filters(handler)
 
     assert filters == {
-        "must": [
+        "filter": [
             {
                 "bool": {
                     "should": [
                         {"term": {"biolink_types": "Disease"}},
                         {"term": {"biolink_types": "Gene"}},
                         {"term": {"biolink_types": "PhenotypicFeature"}},
-                    ]
+                    ],
+                    "minimum_should_match": 1,
                 }
             }
         ],
@@ -72,7 +73,7 @@ async def test_lookup_requests_and_returns_preferred_name_highlights():
         limit=10,
     )
 
-    results = await lookup(metadata, lookup_query, {"must": [], "must_not": []})
+    results = await lookup(metadata, lookup_query, {"filter": [], "must_not": []})
 
     assert search.await_args.kwargs["highlight"]["fields"] == {
         "names": {"pre_tags": ["<strong>"], "post_tags": ["</strong>"]},
@@ -94,7 +95,7 @@ def test_autocomplete_query_treats_final_term_as_prefix():
         limit=10,
     )
 
-    query = _build_elasticsearch_query(lookup_query, {"must": [], "must_not": []})
+    query = _build_elasticsearch_query(lookup_query, {"filter": [], "must_not": []})
 
     dis_max_queries = query["bool"]["must"][0]["dis_max"]["queries"]
     assert dis_max_queries == [
@@ -125,7 +126,7 @@ def test_non_autocomplete_query_does_not_add_prefix_match():
         limit=10,
     )
 
-    query = _build_elasticsearch_query(lookup_query, {"must": [], "must_not": []})
+    query = _build_elasticsearch_query(lookup_query, {"filter": [], "must_not": []})
 
     assert query["bool"]["must"][0]["dis_max"]["queries"] == [
         {
@@ -150,10 +151,25 @@ def test_each_filter_category_becomes_its_own_group():
     # One group per supplied category. Clauses are OR'd within a group; the groups
     # themselves are AND'd against each other by _build_elasticsearch_query.
     assert filters == {
-        "must": [
-            {"bool": {"should": [{"term": {"biolink_types": "Disease"}}]}},
-            {"bool": {"should": [{"prefix": {"curie": "MONDO"}}, {"prefix": {"curie": "HP"}}]}},
-            {"bool": {"should": [{"term": {"taxa": "NCBITaxon:9606"}}]}},
+        "filter": [
+            {
+                "bool": {
+                    "should": [{"term": {"biolink_types": "Disease"}}],
+                    "minimum_should_match": 1,
+                }
+            },
+            {
+                "bool": {
+                    "should": [{"prefix": {"curie": "MONDO"}}, {"prefix": {"curie": "HP"}}],
+                    "minimum_should_match": 1,
+                }
+            },
+            {
+                "bool": {
+                    "should": [{"term": {"taxa": "NCBITaxon:9606"}}],
+                    "minimum_should_match": 1,
+                }
+            },
         ],
         "must_not": [],
     }
@@ -166,7 +182,7 @@ def test_omitted_filter_categories_contribute_no_group():
 
     filters = BaseNameResolutionLookupHandler._build_lookup_filters(handler)
 
-    assert filters == {"must": [], "must_not": []}
+    assert filters == {"filter": [], "must_not": []}
 
 
 def test_filter_groups_are_added_without_replacing_the_search_query():
@@ -179,19 +195,30 @@ def test_filter_groups_are_added_without_replacing_the_search_query():
         limit=10,
     )
     filters = {
-        "must": [
-            {"bool": {"should": [{"term": {"biolink_types": "Disease"}}]}},
-            {"bool": {"should": [{"prefix": {"curie": "MONDO"}}, {"prefix": {"curie": "HP"}}]}},
+        "filter": [
+            {
+                "bool": {
+                    "should": [{"term": {"biolink_types": "Disease"}}],
+                    "minimum_should_match": 1,
+                }
+            },
+            {
+                "bool": {
+                    "should": [{"prefix": {"curie": "MONDO"}}, {"prefix": {"curie": "HP"}}],
+                    "minimum_should_match": 1,
+                }
+            },
         ],
         "must_not": [{"prefix": {"curie": "UMLS"}}],
     }
 
     query = _build_elasticsearch_query(lookup_query, filters)
 
-    # The name-matching dis_max must survive alongside the filters, not be replaced.
+    # The name-matching dis_max remains the only scoring must clause.
+    assert len(query["bool"]["must"]) == 1
     assert "dis_max" in query["bool"]["must"][0]
-    # Each category stays a separate required bool, so categories combine with AND.
-    assert query["bool"]["must"][1:] == filters["must"]
+    # Each category stays a separate required bool under non-scoring filter context.
+    assert query["bool"]["filter"] == filters["filter"]
     assert query["bool"]["must_not"] == [{"prefix": {"curie": "UMLS"}}]
 
 
@@ -205,12 +232,11 @@ def test_exclude_prefixes_populate_must_not_without_any_filter_group():
         limit=10,
     )
 
-    query = _build_elasticsearch_query(
-        lookup_query, {"must": [], "must_not": [{"prefix": {"curie": "UMLS"}}]}
-    )
+    query = _build_elasticsearch_query(lookup_query, {"filter": [], "must_not": [{"prefix": {"curie": "UMLS"}}]})
 
     assert len(query["bool"]["must"]) == 1
     assert "dis_max" in query["bool"]["must"][0]
+    assert "filter" not in query["bool"]
     assert query["bool"]["must_not"] == [{"prefix": {"curie": "UMLS"}}]
 
 
@@ -224,8 +250,9 @@ def test_unfiltered_query_adds_no_filter_clauses():
         limit=10,
     )
 
-    query = _build_elasticsearch_query(lookup_query, {"must": [], "must_not": []})
+    query = _build_elasticsearch_query(lookup_query, {"filter": [], "must_not": []})
 
     assert len(query["bool"]["must"]) == 1
     assert "dis_max" in query["bool"]["must"][0]
+    assert "filter" not in query["bool"]
     assert "must_not" not in query["bool"]

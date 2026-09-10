@@ -251,17 +251,11 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
         return sanitized_lookup_strings
 
     def _build_lookup_filters(self) -> dict:
-        """Handles the parsing and building of various elasticsearch boolean logic queries.
+        """Build non-scoring Elasticsearch filters for lookup requests.
 
-        We have two types of boolean logic queries we need to build for this endpoint
-
-        1) should
-        In this case we want to boolean OR specific different types of required
-        fields we want in the results output
-
-        2) must_not
-        In this case we to boolean AND NOT specific different types of required
-        fields we want to ensure `don't` exist in the results output
+        Values within a positive filter category are combined with OR, while
+        separate categories are combined with AND. Excluded prefixes are
+        represented as ``must_not`` clauses.
         """
 
         # to cover both the singular and plural biolink_type arguments, we combine them into a single list
@@ -291,7 +285,7 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
             pass
 
         # Apply filters as needed.
-        es_filters = {"must": [], "must_not": []}
+        es_filters = {"filter": [], "must_not": []}
 
         # OR-relationship within each group, chained with AND-relationship between groups.
         for values, build in [
@@ -301,7 +295,7 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
         ]:
             should_filters = [build(s) for v in values if (s := v.strip())]
             if should_filters:
-                es_filters["must"].append({"bool": {"should": should_filters}})
+                es_filters["filter"].append({"bool": {"should": should_filters, "minimum_should_match": 1}})
 
         # Prefix: exclude filter
         # Elasticsearch must not
@@ -475,10 +469,8 @@ def _build_elasticsearch_query(lookup_query: LookupQuery, filters: dict) -> dict
             ]
         }
     }
-
-
-    # populate must and must_not filters in compound_lookup_query
-    for key in ["must", "must_not"]:
+    # Keep constraints in filter context so they do not affect name-match scores.
+    for key in ["filter", "must_not"]:
         if len(filters[key]) > 0:
             compound_lookup_query["bool"].setdefault(key, []).extend(filters[key])
 
