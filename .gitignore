@@ -214,3 +214,6 @@ __marimo__/
 .sw*
 
 local.config.json
+
+# Local project notes
+/local-notes/

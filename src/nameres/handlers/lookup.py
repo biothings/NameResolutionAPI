@@ -281,31 +281,17 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
         return lookup_strings
 
     def _sanitize_lookup_query(self, lookup_strings: list[str]) -> list[tuple[str, tuple[str, ...]]]:
-        r"""Performs input sanitization on the lookup query terms.
+        """Normalize lookup terms before passing them to Elasticsearch.
 
-        Sanitization Operations:
+        Normalization operations:
         1) strip and lowercase the query (all indexes are case-insensitive)
-        2) evaluate string encoding
-            There is a possibility that the input text isn't in UTF-8.
-            Python packages that try to determine what the encoding is:
-            - https://pypi.org/project/charset-normalizer/
-            - https://www.crummy.com/software/BeautifulSoup/bs4/doc/#unicode-dammit
-            But the only issue we've run into so far has been the Windows smart
-            quote (https://github.com/TranslatorSRI/NameResolution/issues/176), so
-            let's detect and replace just those characters.
+        2) normalize Windows smart quotes to their ASCII equivalents
         3) prune any empty string searches
-            If there's nothing to search don't perform any search
-        4) escape special characters
-            We need to use backslash to escape characters
-               ( e.g. "\(" )
-            to remove the special significance of characters
-            inside round brackets, but not inside double-quotes.
-            So we escape them separately:
-            - For a full exact search, we only remove double-quotes
-            and slashes, leaving other special characters as-is.
-        5) escape special characters for tokenization
-            we escape all special characters with backslashes as well as
-            other characters that might mess up the search.
+
+        ``multi_match`` analyzes its query value as text rather than parsing Lucene
+        query-string syntax. The Elasticsearch client handles JSON escaping, so
+        adding Solr-style backslashes here would change tokenization rather than
+        make special characters literal.
         """
         sanitized_lookup_strings = []
         for lookup_string in lookup_strings:
@@ -318,40 +304,8 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
             lookup_string = re.sub(windows_smart_single_quote_pattern, "'", lookup_string)
             lookup_string = re.sub(windows_smart_double_quote_pattern, '"', lookup_string)
 
-            if lookup_string is not None and lookup_string != "":
-                lookup_string_with_escaped_groups = lookup_string.replace("\\", "")
-                lookup_string_with_escaped_groups = lookup_string_with_escaped_groups.replace('"', "")
-
-                # Regex overview
-                # r'[!(){}\[\]^"~*?:/+-\\]'
-                # Match a single character present in the list below [!(){}\[\]^"~*?:/+-\\]
-                # !(){}
-                #  matches a single character in the list !(){} (case sensitive)
-                # \[ matches the character [ with index 9110 (5B16 or 1338) literally (case sensitive)
-                # \] matches the character ] with index 9310 (5D16 or 1358) literally (case sensitive)
-                # ^"~*?:/
-                #  matches a single character in the list ^"~*?:/ (case sensitive)
-                # +-\\ matches a single character in the range between + (index 43) and \ (index 92) (case sensitive)
-                special_characters_group = r'[!(){}\[\]^"~*?:/+-\\]'
-
-                # \g<0> is a backreference which will insert the text most recently matched by
-                # entire pattern. So in this case, because the entire pattern is the special
-                # characters group we wish to escape, it will surrond the last matched special
-                # character with quotes and backslash
-                # Example: query_term? -> query_term"\?"
-                substitution_escape_backreference = r"\\\g<0>"
-                fully_escaped_lookup_string = re.sub(
-                    special_characters_group, substitution_escape_backreference, lookup_string
-                )
-
-                fully_escaped_lookup_string = fully_escaped_lookup_string.replace("&&", " ")
-                fully_escaped_lookup_string = fully_escaped_lookup_string.replace("||", " ")
-
-                query_strings = [lookup_string_with_escaped_groups]
-                if fully_escaped_lookup_string != lookup_string_with_escaped_groups:
-                    query_strings.append(fully_escaped_lookup_string)
-
-                sanitized_lookup_strings.append((raw_lookup_string, tuple(query_strings)))
+            if lookup_string:
+                sanitized_lookup_strings.append((raw_lookup_string, (lookup_string,)))
 
         return sanitized_lookup_strings
 
@@ -530,16 +484,27 @@ async def lookup(
 def _build_elasticsearch_query(lookup_query: LookupQuery, filters: dict) -> dict:
     queries = []
 
-    # Base Query
+    # Prefer a contiguous phrase over a looser token match. These clauses use the
+    # existing analyzed text fields; true whole-field equality would require
+    # normalized keyword subfields in the index mapping.
     for lookup_string in lookup_query.query_strings:
-        queries.append(
-            {
-                "multi_match": {
-                    "query": lookup_string,
-                    "type": "best_fields",
-                    "fields": ["preferred_name^25", "names^10"],
-                }
-            }
+        queries.extend(
+            [
+                {
+                    "multi_match": {
+                        "query": lookup_string,
+                        "type": "phrase",
+                        "fields": ["preferred_name^30", "names^20"],
+                    }
+                },
+                {
+                    "multi_match": {
+                        "query": lookup_string,
+                        "type": "best_fields",
+                        "fields": ["preferred_name^25", "names^10"],
+                    }
+                },
+            ]
         )
 
     # https://www.elastic.co/search-labs/blog/elasticsearch-autocomplete-search#2.-query-time

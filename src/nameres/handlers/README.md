@@ -76,12 +76,17 @@ would apply taxa filters for each pipe separated entry
 
 
 ##### search phrase sanitization
-This operation was already set in place by the solr endpoint, it's effectively just attempting
-to ensure that we have a proper encoding and that any special characters are escaped.
+The lookup endpoint uses structured Elasticsearch Query DSL rather than a Lucene query-string
+parser. Sanitization therefore does not add backslashes or otherwise escape punctuation. It
+trims and lowercases each input, normalizes Windows smart single and double quotes, and omits
+empty searches. Each non-empty input produces one normalized query string. For example, `BRCA1`
+becomes `brca1`, while punctuation in `IL-6`, `SARS-CoV-2`, and `BCR::ABL1` is preserved for
+the configured field analyzers.
 
-Sanitization Operations:
-1) strip and lowercase the query (all indexes are case-insensitive)
-2) evaluate string encoding
+Sanitization operations:
+
+1) Strip and lowercase the query (all indexes are case-insensitive).
+2) Normalize Windows smart quotes.
     There is a possibility that the input text isn't in UTF-8.
     Python packages that try to determine what the encoding is:
     - https://pypi.org/project/charset-normalizer/
@@ -89,71 +94,11 @@ Sanitization Operations:
     But the only issue we've run into so far has been the Windows smart
     quote (https://github.com/TranslatorSRI/NameResolution/issues/176), so
     let's detect and replace just those characters.
-3) prune any empty string searches
-    If there's nothing to search don't perform any search
-4) escape special characters
-    We need to use backslash to escape characters
-       ( e.g. "\(" )
-    to remove the special significance of characters
-    inside round brackets, but not inside double-quotes.
-    So we escape them separately:
-    - For a full exact search, we only remove double-quotes
-    and slashes, leaving other special characters as-is.
-5) escape special characters for tokenization
-    we escape all special characters with backslashes as well as
-    other characters that might mess up the search.
+3) Prune empty searches.
+4) Preserve all other characters for the Elasticsearch field analyzers.
 
-
-```python
-def _sanitize_lookup_query(self, lookup_strings: list[str]) -> list[tuple[str, tuple[str, ...]]]:
-    sanitized_lookup_strings = []
-    for lookup_string in lookup_strings:
-        raw_lookup_string = lookup_string.strip()
-        lookup_string = raw_lookup_string.lower()
-
-        windows_smart_single_quote_pattern = r"[‘’]"
-        windows_smart_double_quote_pattern = r"[“”]"
-
-        lookup_string = re.sub(windows_smart_single_quote_pattern, "'", lookup_string)
-        lookup_string = re.sub(windows_smart_double_quote_pattern, '"', lookup_string)
-
-        if lookup_string is not None and lookup_string != "":
-            lookup_string_with_escaped_groups = lookup_string.replace("\\", "")
-            lookup_string_with_escaped_groups = lookup_string_with_escaped_groups.replace('"', "")
-
-            # Regex overview
-            # r'[!(){}\[\]^"~*?:/+-\\]'
-            # Match a single character present in the list below [!(){}\[\]^"~*?:/+-\\]
-            # !(){}
-            #  matches a single character in the list !(){} (case sensitive)
-            # \[ matches the character [ with index 9110 (5B16 or 1338) literally (case sensitive)
-            # \] matches the character ] with index 9310 (5D16 or 1358) literally (case sensitive)
-            # ^"~*?:/
-            #  matches a single character in the list ^"~*?:/ (case sensitive)
-            # +-\\ matches a single character in the range between + (index 43) and \ (index 92) (case sensitive)
-            special_characters_group = r'[!(){}\[\]^"~*?:/+-\\]'
-
-            # \g<0> is a backreference which will insert the text most recently matched by
-            # entire pattern. So in this case, because the entire pattern is the special
-            # characters group we wish to escape, it will surrond the last matched special
-            # character with quotes and backslash
-            # Example: query_term? -> query_term"\?"
-            substitution_escape_backreference = r"\\\g<0>"
-            fully_escaped_lookup_string = re.sub(
-                special_characters_group, substitution_escape_backreference, lookup_string
-            )
-
-            fully_escaped_lookup_string = fully_escaped_lookup_string.replace("&&", " ")
-            fully_escaped_lookup_string = fully_escaped_lookup_string.replace("||", " ")
-
-            query_strings = [lookup_string_with_escaped_groups]
-            if fully_escaped_lookup_string != lookup_string_with_escaped_groups:
-                query_strings.append(fully_escaped_lookup_string)
-
-            sanitized_lookup_strings.append((raw_lookup_string, tuple(query_strings)))
-
-    return sanitized_lookup_strings
-```
+The handler returns `(raw_string, (normalized_string,))` for each non-empty input; the normalized
+string is the only value sent to Elasticsearch.
 
 ##### filters
 
@@ -304,7 +249,7 @@ def _build_lookup_filters(self) -> dict:
 So this query is fairly complicated because we have a lot of specifications we want to achieve from
 our lookup. The overall structure of the query is the following:
 
-```JSON
+```jsonc
 {
     "bool": {
         "must": [
@@ -313,33 +258,25 @@ our lookup. The overall structure of the query is the following:
                     "queries": [
                         {
                             "multi_match": {
-                                "query": lookup_string0,
-                                "type": "best_fields",
-                                "fields": ["preferred_name^25", "names^10"],
+                                "query": normalized_lookup_string,
+                                "type": "phrase",
+                                "fields": ["preferred_name^30", "names^20"]
                             }
                         },
                         {
                             "multi_match": {
-                                "query": lookup_string1,
+                                "query": normalized_lookup_string,
                                 "type": "best_fields",
-                                "fields": ["preferred_name^25", "names^10"],
+                                "fields": ["preferred_name^25", "names^10"]
                             }
                         },
 
-                        # autocomplete queries
-
+                        // Included only when autocomplete is enabled
                         {
                             "multi_match": {
-                                "query": lookup_string0,
+                                "query": normalized_lookup_string,
                                 "type": "phrase_prefix",
-                                "fields": ["preferred_name^30", "names^20"],
-                            }
-                        },
-                        {
-                            "multi_match": {
-                                "query": lookup_string1,
-                                "type": "phrase_prefix",
-                                "fields": ["preferred_name^30", "names^20"],
+                                "fields": ["preferred_name^30", "names^20"]
                             }
                         }
                     ]
@@ -362,9 +299,9 @@ our lookup. The overall structure of the query is the following:
 The `dis_max` (disjunction max) query returns documents that match one or more of its alternatives
 and uses the highest-scoring match as the score. No `tie_breaker` is currently configured. The Solr
 implementation uses the richer eDisMax query parser, so Elasticsearch `dis_max` is an approximation,
-not a direct equivalent. Sanitization can produce more than one query string, each represented by a
-`multi_match`. Autocomplete adds `phrase_prefix` alternatives alongside the standard `best_fields`
-queries.
+not a direct equivalent. Each normalized input is represented by a contiguous-token `phrase`
+alternative and a looser `best_fields` alternative. Autocomplete adds a `phrase_prefix` alternative
+for the incomplete final term.
 
 
 
@@ -374,16 +311,25 @@ queries.
 def _build_elasticsearch_query(lookup_query: LookupQuery, filters: dict) -> dict:
     queries = []
 
-    # Base Query
+    # Prefer a contiguous phrase, then allow a looser token match.
     for lookup_string in lookup_query.query_strings:
-        queries.append(
-            {
-                "multi_match": {
-                    "query": lookup_string,
-                    "type": "best_fields",
-                    "fields": ["preferred_name^25", "names^10"],
-                }
-            }
+        queries.extend(
+            [
+                {
+                    "multi_match": {
+                        "query": lookup_string,
+                        "type": "phrase",
+                        "fields": ["preferred_name^30", "names^20"],
+                    }
+                },
+                {
+                    "multi_match": {
+                        "query": lookup_string,
+                        "type": "best_fields",
+                        "fields": ["preferred_name^25", "names^10"],
+                    }
+                },
+            ]
         )
 
     # https://www.elastic.co/search-labs/blog/elasticsearch-autocomplete-search#2.-query-time
@@ -469,10 +415,9 @@ params = {
     * Decide which taxon behavior is the compatibility target. Deployed Solr `v1.5.2` filters only on the
         requested taxa, while newer upstream Solr also admits records with `taxon_specific:false`; the
         Elasticsearch index does not currently expose that field.
-    * We have a difference in the index as they created custom field types that duplicate the
-    some of the content of the field in the index that likely increases the size by a moderate amount.
-    At the moment I haven't done this to see if we even need to perform the additional indexing. The
-    additional fields and solr indexing is shown below
+    * The current Elasticsearch mapping does not expose normalized keyword subfields for names.
+        The `phrase` query is therefore an exact contiguous-token preference, not true whole-field
+        equality. Whole-field equality would require normalized keyword subfields and reindexing.
     * Likely some more rigorous testing akin to what we did with nodenorm. Will be harder due to the
         difference in scoring
     * Compare Elasticsearch's `phrase_prefix` autocomplete behavior with Solr's trailing-wildcard query

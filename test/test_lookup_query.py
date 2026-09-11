@@ -40,6 +40,44 @@ def _make_handler(handler_class=BaseNameResolutionLookupHandler, *, body=None, q
     return handler
 
 
+@pytest.mark.parametrize(
+    ("raw_string", "normalized_string"),
+    [
+        ("BRCA1", "brca1"),
+        ("TP53", "tp53"),
+        ("CYP2D6", "cyp2d6"),
+        ("IL-6", "il-6"),
+        ("SARS-CoV-2", "sars-cov-2"),
+        ("BCR::ABL1", "bcr::abl1"),
+    ],
+)
+def test_sanitize_preserves_biomedical_names_without_lucene_escaping(raw_string, normalized_string):
+    handler = _make_handler()
+
+    assert handler._sanitize_lookup_query([raw_string]) == [(raw_string, (normalized_string,))]
+
+
+def test_prepare_and_query_builder_keep_brca1_intact():
+    handler = _make_handler(query_arguments={"string": [" BRCA1 "], "autocomplete": ["false"]})
+
+    BaseNameResolutionLookupHandler.prepare(handler)
+
+    assert handler.lookup_queries == [
+        LookupQuery(
+            raw_string="BRCA1",
+            query_strings=("brca1",),
+            autocomplete=False,
+            highlighting=False,
+            offset=0,
+            limit=10,
+        )
+    ]
+    query = _build_elasticsearch_query(handler.lookup_queries[0], handler.filters)
+    query_clauses = query["bool"]["must"][0]["dis_max"]["queries"]
+    assert [clause["multi_match"]["query"] for clause in query_clauses] == ["brca1", "brca1"]
+    assert [clause["multi_match"]["type"] for clause in query_clauses] == ["phrase", "best_fields"]
+
+
 def test_biolink_type_filters_accept_singular_and_plural_arguments():
     handler = _make_handler(
         query_arguments={
@@ -132,6 +170,13 @@ def test_autocomplete_query_treats_final_term_as_prefix():
         {
             "multi_match": {
                 "query": "diabe",
+                "type": "phrase",
+                "fields": ["preferred_name^30", "names^20"],
+            }
+        },
+        {
+            "multi_match": {
+                "query": "diabe",
                 "type": "best_fields",
                 "fields": ["preferred_name^25", "names^10"],
             }
@@ -146,7 +191,7 @@ def test_autocomplete_query_treats_final_term_as_prefix():
     ]
 
 
-def test_non_autocomplete_query_does_not_add_prefix_match():
+def test_non_autocomplete_query_adds_phrase_and_token_matches_without_prefix_match():
     lookup_query = LookupQuery(
         raw_string="diabe",
         query_strings=("diabe",),
@@ -162,10 +207,17 @@ def test_non_autocomplete_query_does_not_add_prefix_match():
         {
             "multi_match": {
                 "query": "diabe",
+                "type": "phrase",
+                "fields": ["preferred_name^30", "names^20"],
+            }
+        },
+        {
+            "multi_match": {
+                "query": "diabe",
                 "type": "best_fields",
                 "fields": ["preferred_name^25", "names^10"],
             }
-        }
+        },
     ]
 
 
