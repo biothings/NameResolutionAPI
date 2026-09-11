@@ -1,4 +1,27 @@
-from nameres.handlers.lookup import LookupQuery, _build_elasticsearch_query
+from unittest.mock import Mock
+
+from nameres.handlers.lookup import BaseNameResolutionLookupHandler, LookupQuery, _build_elasticsearch_query
+
+
+def test_biolink_type_filters_accept_singular_and_plural_arguments():
+    handler = Mock()
+    query_arguments = {
+        "biolink_types": ["biolink:Disease", " Gene "],
+        "biolink_type": ["biolink:PhenotypicFeature", "  "],
+    }
+    handler.get_arguments.side_effect = lambda name: query_arguments.get(name, [])
+    handler.get_argument.side_effect = lambda _name, default, strip: default
+
+    filters = BaseNameResolutionLookupHandler._build_lookup_filters(handler)
+
+    assert filters == {
+        "should": [
+            {"term": {"biolink_types": "Disease"}},
+            {"term": {"biolink_types": "Gene"}},
+            {"term": {"biolink_types": "PhenotypicFeature"}},
+        ],
+        "must_not": [],
+    }
 
 
 def test_autocomplete_query_treats_final_term_as_prefix():
