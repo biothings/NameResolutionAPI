@@ -474,4 +474,15 @@ def _build_elasticsearch_query(lookup_query: LookupQuery, filters: dict) -> dict
         if len(filters[key]) > 0:
             compound_lookup_query["bool"].setdefault(key, []).extend(filters[key])
 
-    return compound_lookup_query
+    # Match Solr's multiplicative log(sum(clique_identifier_count, 1)) boost.
+    return {
+        "function_score": {
+            "query": compound_lookup_query,
+            "field_value_factor": {
+                "field": "clique_identifier_count",
+                "modifier": "log1p",
+                "missing": 0,
+            },
+            "boost_mode": "multiply",
+        }
+    }
