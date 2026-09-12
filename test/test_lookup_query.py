@@ -158,6 +158,21 @@ def test_omitted_filter_categories_contribute_no_group():
     assert filters == {"filter": [], "must_not": []}
 
 
+def test_blank_excluded_prefixes_are_ignored():
+    handler = Mock()
+    handler.get_arguments.side_effect = lambda _name: []
+    handler.get_argument.side_effect = lambda name, default, strip: (
+        " | UMLS |  | " if name == "exclude_prefixes" else default
+    )
+
+    filters = BaseNameResolutionLookupHandler._build_lookup_filters(handler)
+
+    assert filters == {
+        "filter": [],
+        "must_not": [{"prefix": {"curie": "UMLS"}}],
+    }
+
+
 def test_filter_groups_are_added_without_replacing_the_search_query():
     lookup_query = LookupQuery(
         raw_string="insulin",

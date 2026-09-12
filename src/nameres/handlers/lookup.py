@@ -300,9 +300,9 @@ class BaseNameResolutionLookupHandler(NameResolutionBaseHandler):
         # Prefix: exclude filter
         # Elasticsearch must not
         for prefix in exclude_prefixes:
-            prefix = prefix.strip()
-            must_not_filter = {"prefix": {"curie": prefix}}
-            es_filters["must_not"].append(must_not_filter)
+            if prefix := prefix.strip():
+                must_not_filter = {"prefix": {"curie": prefix}}
+                es_filters["must_not"].append(must_not_filter)
 
         # We also need to include entries that don't have taxa specified.
         # TODO Skipping for the moment as we need to update the index
