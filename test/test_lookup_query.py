@@ -3,6 +3,10 @@ from unittest.mock import Mock
 from nameres.handlers.lookup import BaseNameResolutionLookupHandler, LookupQuery, _build_elasticsearch_query
 
 
+def _text_query(query: dict) -> dict:
+    return query["function_score"]["query"]
+
+
 def test_biolink_type_filters_accept_singular_and_plural_arguments():
     handler = Mock()
     query_arguments = {
@@ -15,13 +19,43 @@ def test_biolink_type_filters_accept_singular_and_plural_arguments():
     filters = BaseNameResolutionLookupHandler._build_lookup_filters(handler)
 
     assert filters == {
-        "should": [
-            {"term": {"biolink_types": "Disease"}},
-            {"term": {"biolink_types": "Gene"}},
-            {"term": {"biolink_types": "PhenotypicFeature"}},
+        "filter": [
+            {
+                "bool": {
+                    "should": [
+                        {"term": {"biolink_types": "Disease"}},
+                        {"term": {"biolink_types": "Gene"}},
+                        {"term": {"biolink_types": "PhenotypicFeature"}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
         ],
         "must_not": [],
     }
+
+
+def test_clique_identifier_count_multiplies_text_score():
+    lookup_query = LookupQuery(
+        raw_string="insulin",
+        query_strings=("insulin",),
+        autocomplete=False,
+        highlighting=False,
+        offset=0,
+        limit=10,
+    )
+
+    query = _build_elasticsearch_query(lookup_query, {"filter": [], "must_not": []})
+
+    assert set(query) == {"function_score"}
+    function_score = query["function_score"]
+    assert set(function_score) == {"query", "field_value_factor", "boost_mode"}
+    assert function_score["field_value_factor"] == {
+        "field": "clique_identifier_count",
+        "modifier": "log1p",
+        "missing": 0,
+    }
+    assert function_score["boost_mode"] == "multiply"
 
 
 def test_autocomplete_query_treats_final_term_as_prefix():
@@ -34,7 +68,7 @@ def test_autocomplete_query_treats_final_term_as_prefix():
         limit=10,
     )
 
-    query = _build_elasticsearch_query(lookup_query, {"should": [], "must_not": []})
+    query = _text_query(_build_elasticsearch_query(lookup_query, {"filter": [], "must_not": []}))
 
     dis_max_queries = query["bool"]["must"][0]["dis_max"]["queries"]
     assert dis_max_queries == [
@@ -65,7 +99,7 @@ def test_non_autocomplete_query_does_not_add_prefix_match():
         limit=10,
     )
 
-    query = _build_elasticsearch_query(lookup_query, {"should": [], "must_not": []})
+    query = _text_query(_build_elasticsearch_query(lookup_query, {"filter": [], "must_not": []}))
 
     assert query["bool"]["must"][0]["dis_max"]["queries"] == [
         {
@@ -76,3 +110,142 @@ def test_non_autocomplete_query_does_not_add_prefix_match():
             }
         }
     ]
+
+
+def test_each_filter_category_becomes_its_own_group():
+    handler = Mock()
+    query_arguments = {"biolink_type": ["biolink:Disease"]}
+    string_arguments = {"only_prefixes": "MONDO| |HP", "only_taxa": " NCBITaxon:9606 "}
+    handler.get_arguments.side_effect = lambda name: query_arguments.get(name, [])
+    handler.get_argument.side_effect = lambda name, default, strip: string_arguments.get(name, default)
+
+    filters = BaseNameResolutionLookupHandler._build_lookup_filters(handler)
+
+    # One group per supplied category. Clauses are OR'd within a group; the groups
+    # themselves are AND'd against each other by _build_elasticsearch_query.
+    assert filters == {
+        "filter": [
+            {
+                "bool": {
+                    "should": [{"term": {"biolink_types": "Disease"}}],
+                    "minimum_should_match": 1,
+                }
+            },
+            {
+                "bool": {
+                    "should": [{"prefix": {"curie": "MONDO"}}, {"prefix": {"curie": "HP"}}],
+                    "minimum_should_match": 1,
+                }
+            },
+            {
+                "bool": {
+                    "should": [{"term": {"taxa": "NCBITaxon:9606"}}],
+                    "minimum_should_match": 1,
+                }
+            },
+        ],
+        "must_not": [],
+    }
+
+
+def test_omitted_filter_categories_contribute_no_group():
+    handler = Mock()
+    handler.get_arguments.side_effect = lambda _name: []
+    handler.get_argument.side_effect = lambda _name, default, strip: default
+
+    filters = BaseNameResolutionLookupHandler._build_lookup_filters(handler)
+
+    assert filters == {"filter": [], "must_not": []}
+
+
+def test_blank_excluded_prefixes_are_ignored():
+    handler = Mock()
+    handler.get_arguments.side_effect = lambda _name: []
+    handler.get_argument.side_effect = lambda name, default, strip: (
+        " | UMLS |  | " if name == "exclude_prefixes" else default
+    )
+
+    filters = BaseNameResolutionLookupHandler._build_lookup_filters(handler)
+
+    assert filters == {
+        "filter": [],
+        "must_not": [{"prefix": {"curie": "UMLS"}}],
+    }
+
+
+def test_filter_groups_are_added_without_replacing_the_search_query():
+    lookup_query = LookupQuery(
+        raw_string="insulin",
+        query_strings=("insulin",),
+        autocomplete=False,
+        highlighting=False,
+        offset=0,
+        limit=10,
+    )
+    filters = {
+        "filter": [
+            {
+                "bool": {
+                    "should": [{"term": {"biolink_types": "Disease"}}],
+                    "minimum_should_match": 1,
+                }
+            },
+            {
+                "bool": {
+                    "should": [{"prefix": {"curie": "MONDO"}}, {"prefix": {"curie": "HP"}}],
+                    "minimum_should_match": 1,
+                }
+            },
+        ],
+        "must_not": [{"prefix": {"curie": "UMLS"}}],
+    }
+
+    query = _text_query(_build_elasticsearch_query(lookup_query, filters))
+
+    # The name-matching dis_max remains the only scoring must clause.
+    assert len(query["bool"]["must"]) == 1
+    assert "dis_max" in query["bool"]["must"][0]
+    # Each category stays a separate required bool under non-scoring filter context.
+    assert query["bool"]["filter"] == filters["filter"]
+    assert query["bool"]["must_not"] == [{"prefix": {"curie": "UMLS"}}]
+
+
+def test_exclude_prefixes_populate_must_not_without_any_filter_group():
+    lookup_query = LookupQuery(
+        raw_string="insulin",
+        query_strings=("insulin",),
+        autocomplete=False,
+        highlighting=False,
+        offset=0,
+        limit=10,
+    )
+
+    query = _text_query(
+        _build_elasticsearch_query(
+            lookup_query,
+            {"filter": [], "must_not": [{"prefix": {"curie": "UMLS"}}]},
+        )
+    )
+
+    assert len(query["bool"]["must"]) == 1
+    assert "dis_max" in query["bool"]["must"][0]
+    assert "filter" not in query["bool"]
+    assert query["bool"]["must_not"] == [{"prefix": {"curie": "UMLS"}}]
+
+
+def test_unfiltered_query_adds_no_filter_clauses():
+    lookup_query = LookupQuery(
+        raw_string="insulin",
+        query_strings=("insulin",),
+        autocomplete=False,
+        highlighting=False,
+        offset=0,
+        limit=10,
+    )
+
+    query = _text_query(_build_elasticsearch_query(lookup_query, {"filter": [], "must_not": []}))
+
+    assert len(query["bool"]["must"]) == 1
+    assert "dis_max" in query["bool"]["must"][0]
+    assert "filter" not in query["bool"]
+    assert "must_not" not in query["bool"]

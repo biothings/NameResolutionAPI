@@ -144,295 +144,128 @@ def _sanitize_lookup_query(self, lookup_strings: list[str]) -> list[tuple[str]]:
 
 ##### filters
 
-We have 4 different filters we have to apply to our query depending on what the user
-supplies
+Four optional filter categories can constrain a lookup:
 
-1) biolink-type
-If the user supplies a biolink-type or a collection of biolink-types, we have to apply a filter
-to the search to only include results which match the specification. The query by itself is a simple
-`term` based filter within a `should` clause for each biolink-type specified
+- `biolink_type` and `biolink_types` produce exact `term` queries on `biolink_types`.
+- `only_prefixes` produces `prefix` queries on `curie`.
+- `only_taxa` produces exact `term` queries on `taxa`.
+- `exclude_prefixes` produces `prefix` queries under `must_not`.
 
-```JSON
-{
-    "should": [
-        {
-            "term": {"biolink_types": <biolink_type0>}
-        },
-        {
-            "term": {"biolink_types": <biolink_type1>}
-        },
-        ...
-        {
-            "term": {"biolink_types": <biolink_typeN>}
-        },
-    ]
-}
-
-2) only-prefixes
-Same as case 1, but in this case looking for filtering by specified CURIE prefix. Still leveraged
-in a `should` clause, but leverages `prefix` instead of `term`
+Values within each positive category are combined with OR. The positive categories themselves are
+separate entries under `bool.filter`, so supplying more than one category combines them with AND.
+Excluded prefixes are placed under `must_not`. These clauses run in filter context and therefore do
+not change the text relevance score. For example:
 
 ```JSON
 {
-    "should": [
+    "filter": [
         {
-            "prefix": {"curie": <curie_prefix0>}
-        },
-        {
-            "prefix": {"curie": <curie_prefix1>}
-        },
-        ...
-        {
-            "prefix": {"curie": <curie_prefixN>}
-        },
-    ]
-}
-
-3) exclude-prefixes
-The inversion of case 2, this filters curie prefixes that we don't want included in the final
-results. Leverages a `must_not` clause with the `prefix` query
-
-```JSON
-{
-    "must_not": [
-        {
-            "prefix": {"curie": <curie_prefix0>}
-        },
-        {
-            "prefix": {"curie": <curie_prefix1>}
-        },
-        ...
-        {
-            "prefix": {"curie": <curie_prefixN>}
-        },
-    ]
-}
-```
-
-4) only-taxa
-Same as case 1, but in this case looking for filtering by specified taxon. Still leveraged
-in a `should` clause, along with the same `term` query
-
-```JSON
-{
-    "should": [
-        {
-            "term": {"taxa": <taxon0>}
-        },
-        {
-            "term": {"taxa": <taxon1>}
-        },
-        ...
-        {
-            "term": {"taxa": <taxonN>}
-        },
-    ]
-}
-```
-
-This is different from solr, but only syntatically. We have to include these filters within
-the main query in elasticsearch, whereas solr provides a filter in the query that includes 
-boolean logic combining the field:value pairs in a similar fashion to our `should` and `must_not`
-clauses above
-
-
-```python
-def _build_lookup_filters(self) -> dict:
-    """Handles the parsing and building of various elasticsearch boolean logic queries.
-
-    We have two types of boolean logic queries we need to build for this endpoint
-
-    1) should
-    In this case we want to boolean OR specific different types of required
-    fields we want in the results output
-
-    2) must_not
-    In this case we to boolean AND NOT specific different types of required
-    fields we want to ensure `don't` exist in the results output
-    """
-    biolink_types = self.get_argument("biolink_types", default=[], strip=True)
-
-    filter_delimiter = "|"
-
-    only_prefixes = self.get_argument("only_prefixes", default="", strip=True)
-    only_prefixes = only_prefixes.split(filter_delimiter)
-    try:
-        only_prefixes.remove("")
-    except ValueError:
-        pass
-
-    exclude_prefixes = self.get_argument("exclude_prefixes", default="", strip=True)
-    exclude_prefixes = exclude_prefixes.split(filter_delimiter)
-    try:
-        exclude_prefixes.remove("")
-    except ValueError:
-        pass
-
-    only_taxa = self.get_argument("only_taxa", default="", strip=True)
-    only_taxa = only_taxa.split(filter_delimiter)
-    try:
-        only_taxa.remove("")
-    except ValueError:
-        pass
-
-    # Apply filters as needed.
-    filters = {"should": [], "must_not": []}
-
-    # Biolink type filter
-    # Elasticsearch should
-    for biolink_type in biolink_types:
-        biolink_type = biolink_type.strip()
-        if biolink_type is not None:
-            should_filter = {"term": {"biolink_types": biolink_type.remove("biolink:")}}
-            filters["should"].append(should_filter)
-
-    # Prefix: only filter
-    # Elasticsearch should + Match boolean prefix query
-    for prefix in only_prefixes:
-        prefix = prefix.strip()
-        should_filter = {"prefix": {"curie": prefix}}
-        filters["should"].append(should_filter)
-
-    # Prefix: exclude filter
-    # Elasticsearch must not
-    for prefix in exclude_prefixes:
-        prefix = prefix.strip()
-        must_not_filter = {"prefix": {"curie": prefix}}
-        filters["must_not"].append(must_not_filter)
-
-    # Taxa filter.
-    # only_taxa is like: 'NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955'
-    # Elasticsearch should
-    for taxon in only_taxa:
-        taxon = taxon.strip()
-        should_filter = {"term": {"taxa": taxon}}
-        filters["should"].append(should_filter)
-
-    # We also need to include entries that don't have taxa specified.
-    # TODO Skipping for the moment as we need to update the index
-    # filters["should"].append({ "term" : { "taxon_specific" : False } }
-
-    return filters
-```
-
-
-##### build elasticsearch query
-
-So this query is fairly complicated because we have a lot of specifications we want to achieve from
-our lookup. The overall structure of the query is the following:
-
-```JSON
-{
-    "bool": {
-        "must": [
-            {
-                "dis_max": {
-                    "queries": [
-                        {
-                            "multi_match": {
-                                "query": lookup_string0,
-                                "type": "best_fields",
-                                "fields": ["preferred_name^25", "name^10"],
-                            }
-                        },
-                        {
-                            "multi_match": {
-                                "query": lookup_string1,
-                                "type": "best_fields",
-                                "fields": ["preferred_name^25", "name^10"],
-                            }
-                        },
-
-                        # autocomplete queries
-
-                        {
-                            "multi_match": {
-                                "query": lookup_string0,
-                                "type": "phrase",
-                                "fields": ["preferred_name^30", "name^20"],
-                            }
-                        },
-                        {
-                            "multi_match": {
-                                "query": lookup_string1,
-                                "type": "phrase",
-                                "fields": ["preferred_name^30", "name^20"],
-                            }
-                        }
-                    ]
-                }
-            },
-            {
-                "should":[<insert should filters>]
+            "bool": {
+                "should": [
+                    {"term": {"biolink_types": "Disease"}},
+                    {"term": {"biolink_types": "PhenotypicFeature"}}
+                ],
+                "minimum_should_match": 1
             }
-        ]
-    },
-    "must_not": [<insert must_not filters>]
-}
-```
-
-The `dis_max` (disjunction maximization) filter in this case will return documents that match one of
-more of the provided queries. If multiple match than it selects amongest the highest relevance
-scoring with tie breaking capabilities based off additional submatching. The original solr index
-leveraged a more advanced version called the extended disjunction max query that is specific to
-solr. Elasticsearch doesn't currently implement this version so we leverage the standard `dis_max`.
-From the string search santization we break each query into a separate `multi_match`. This is also
-how we incorporate the autocomplete version, as we also extend additional queries to leverage
-`phrase` based matches compared to the standard of `best_fields`
-
-
-
-```python
-
-# elasticsearch query
-def _build_elasticsearch_query(lookup_query: list[LookupQuery], filters: dict) -> dict:
-    queries = []
-
-    # Base Query
-    for lookup_string in lookup_query.string:
-        queries.append(
-            {
-                "multi_match": {
-                    "query": lookup_string,
-                    "type": "best_fields",
-                    "fields": ["preferred_name^25", "name^10"],
-                }
+        },
+        {
+            "bool": {
+                "should": [
+                    {"prefix": {"curie": "MONDO"}},
+                    {"prefix": {"curie": "HP"}}
+                ],
+                "minimum_should_match": 1
             }
-        )
-
-    # https://www.elastic.co/search-labs/blog/elasticsearch-autocomplete-search#2.-query-time
-    if lookup_query.autocomplete:
-        for lookup_string in lookup_query.string:
-            queries.append(
-                {
-                    "multi_match": {
-                        "query": lookup_string,
-                        "type": "phrase",
-                        "fields": ["preferred_name^30", "name^20"],
-                    }
-                }
-            )
-
-    compound_lookup_query = {
-        "bool": {
-            "must": [
-                {
-                    "dis_max": {
-                        "queries": queries,
-                    }
-                }
-            ]
+        },
+        {
+            "bool": {
+                "should": [
+                    {"term": {"taxa": "NCBITaxon:9606"}}
+                ],
+                "minimum_should_match": 1
+            }
         }
+    ],
+    "must_not": [
+        {"prefix": {"curie": "UMLS"}}
+    ]
+}
+```
+
+Empty categories are omitted. See `_build_lookup_filters` in `lookup.py` for the request parsing and
+query construction.
+
+
+##### build Elasticsearch query
+
+The text-matching `dis_max` is the only scoring clause in the inner `bool` query. Positive filter
+categories and excluded prefixes are attached to `filter` and `must_not`, respectively, so they
+constrain matches without contributing to the text score. A top-level `function_score` then applies
+the same logarithmic clique-size multiplier used by the Solr implementation.
+
+```JSON
+{
+    "function_score": {
+        "query": {
+            "bool": {
+                "must": [
+                    {
+                        "dis_max": {
+                            "queries": [
+                                {
+                                    "multi_match": {
+                                        "query": "<lookup string>",
+                                        "type": "best_fields",
+                                        "fields": ["preferred_name^25", "names^10"]
+                                    }
+                                },
+                                {
+                                    "multi_match": {
+                                        "query": "<lookup string>",
+                                        "type": "phrase_prefix",
+                                        "fields": ["preferred_name^30", "names^20"]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "filter": [
+                    {
+                        "bool": {
+                            "should": [
+                                {"term": {"biolink_types": "Disease"}}
+                            ],
+                            "minimum_should_match": 1
+                        }
+                    }
+                ],
+                "must_not": [
+                    {"prefix": {"curie": "UMLS"}}
+                ]
+            }
+        },
+        "field_value_factor": {
+            "field": "clique_identifier_count",
+            "modifier": "log1p",
+            "missing": 0
+        },
+        "boost_mode": "multiply"
     }
-    if len(filters["should"]) > 0:
-        compound_lookup_query["bool"]["must"].append({"bool": {"should": [*filters["should"]]}})
+}
+```
 
-    if len(filters["must_not"]) > 0:
-        compound_lookup_query["bool"]["must_not"] = [*filters["must_not"]]
+One `best_fields` query is generated for every sanitized lookup string. The `phrase_prefix` queries
+are included only for autocomplete requests. `log1p` is the common logarithm after adding one, so
+the final score is:
 
-    return compound_lookup_query
+`text score * log10(clique_identifier_count + 1)`
 
-...
+See `_build_elasticsearch_query` in `lookup.py` for the authoritative implementation.
+
+For comparison, the Solr implementation applies the same multiplier:
+
+```python
 
 # solr query
 if highlighting:
@@ -478,7 +311,6 @@ params = {
 ##### Future Work and Optimizations
 
 * Future Work
-    * Need to figure out how incorporate boosting leveraging the `clique_identifier_count` 
     * Add the `taxon_specific` field to the index. I missed this when looking through the solr schema.
         Only used in taxon filtering at the moment
     * We have a difference in the index as they created custom field types that duplicate the
